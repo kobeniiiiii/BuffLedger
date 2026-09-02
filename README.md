@@ -4,6 +4,10 @@ A standalone buff bar for vanilla WoW 1.12 (Turtle-based servers) that replaces 
 
 ![Buff icons grouped and color-coded by category, with gaps between clusters](screenshots/main.png)
 
+## Requires
+
+**[ClassicAPI](https://github.com/brues-code/ClassicAPI)** - a client-side mod that exposes `C_UnitAuras`, the modern-shaped aura API this addon reads buffs through. It's not a regular addon and can't be installed by copying a folder into `Interface/AddOns/` - see that repo for install instructions. Without it, BuffLedger loads but does nothing (no bar, `/bl` doesn't respond) and prints a message saying so on login. pfUI's own buff module needs the same API, so if pfUI's buffs already work on your setup, ClassicAPI is already present and you don't need to do anything extra.
+
 ## Install
 
 1. Copy the `BuffLedger` folder into `Interface/AddOns/`

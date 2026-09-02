@@ -39,7 +39,7 @@ end
 
 function BL.ScanRaidBuffs()
     if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then
-        BL.Print("Can't scan - C_UnitAuras.GetAuraDataByIndex isn't available.")
+        BL.Print("Can't scan - requires classicapi.dll (github.com/brues-code/ClassicAPI) or an equivalent mod exposing C_UnitAuras.")
         return
     end
 
@@ -53,13 +53,13 @@ function BL.ScanRaidBuffs()
             local _, classToken = UnitClass(unit)
             local i
             for i = 1, 40 do
-                local aura = C_UnitAuras.GetAuraDataByIndex(unit, i, "HELPFUL")
-                if aura and aura.name then
-                    BL.RecordIcon(aura.name, aura.icon)
-                    local rec = found[aura.name]
+                local name, icon = BL.GetAura(unit, i, "HELPFUL")
+                if name then
+                    BL.RecordIcon(name, icon)
+                    local rec = found[name]
                     if not rec then
                         rec = { classes = {}, count = 0 }
-                        found[aura.name] = rec
+                        found[name] = rec
                     end
                     rec.count = rec.count + 1
                     if classToken then rec.classes[classToken] = true end

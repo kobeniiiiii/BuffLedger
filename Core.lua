@@ -233,6 +233,35 @@ function BL.Print(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cffa335eeBuffLedger:|r " .. msg)
 end
 
+-- C_UnitAuras.GetAuraDataByIndex allocates a fresh table every single
+-- call - fine for a one-shot scan, but this addon also calls it from
+-- Bar.lua's live refresh loop on every real buff-change event during
+-- normal play (PLAYER_AURAS_CHANGED, BUFF_UPDATE_DURATION_SELF, ...),
+-- not just from /bl scan, so the GC churn adds up over an actual
+-- session. C_UnitAuras.UnitAura returns the same fields as plain
+-- multiple values instead of a table, so this prefers it when present.
+--
+-- Not verified whether this client's C_UnitAuras backport actually
+-- includes UnitAura (only GetAuraDataByIndex has been directly
+-- confirmed working, via pfUI's own buff module) - guarded behind a
+-- feature check rather than assumed, so this only ever activates where
+-- the client genuinely supports it and otherwise costs nothing.
+local hasUnitAura = C_UnitAuras and type(C_UnitAuras.UnitAura) == "function"
+
+-- Returns name, icon, applications, expirationTime, spellId - the only
+-- fields anything in this addon actually reads off an aura - as plain
+-- values either way, so callers never unpack a table regardless of
+-- which underlying API answered.
+function BL.GetAura(unit, index, filter)
+    if hasUnitAura then
+        local name, icon, applications, _, _, expirationTime, _, _, _, spellId = C_UnitAuras.UnitAura(unit, index, filter)
+        return name, icon, applications, expirationTime, spellId
+    end
+    local aura = C_UnitAuras.GetAuraDataByIndex(unit, index, filter)
+    if not aura then return nil end
+    return aura.name, aura.icon, aura.applications, aura.expirationTime, aura.spellId
+end
+
 -- Lightweight click-menu (a plain frame + pooled row buttons) rather
 -- than Blizzard's UIDropDownMenu, which is finicky to reuse outside its
 -- own XML-driven templates on this client - same reasoning CombatLedger's

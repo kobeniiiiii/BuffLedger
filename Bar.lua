@@ -9,7 +9,7 @@ BuffLedger = BuffLedger or {}
 local BL = BuffLedger
 
 if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then
-    BL.Print("This client build doesn't expose C_UnitAuras.GetAuraDataByIndex - can't function. (pfUI's own buff module needs the same API, so if pfUI's buffs work, this should too.)")
+    BL.Print("Requires ClassicAPI (github.com/brues-code/ClassicAPI) or an equivalent client-side mod exposing C_UnitAuras - this client doesn't have it, so BuffLedger can't function. Same requirement pfUI's own buff module has, if you're wondering why pfUI's buffs work but this doesn't.")
     return
 end
 
@@ -94,18 +94,18 @@ local function CollectEntries()
     local entries = {}
     local i
     for i = 1, BL.MAX_BUFFS do
-        local aura = C_UnitAuras.GetAuraDataByIndex("player", i, "HELPFUL")
-        if aura then
-            BL.RecordIcon(aura.name, aura.icon)
-            local group, class = BL.Categorize(aura.name)
+        local name, icon, applications, expirationTime, spellId = BL.GetAura("player", i, "HELPFUL")
+        if name then
+            BL.RecordIcon(name, icon)
+            local group, class = BL.Categorize(name)
             if visible[group] then
                 local entry = {
                     index = i,
-                    name = aura.name,
-                    icon = aura.icon,
-                    spellId = aura.spellId,
-                    expirationTime = aura.expirationTime or 0,
-                    stackCount = aura.applications or 0,
+                    name = name,
+                    icon = icon,
+                    spellId = spellId,
+                    expirationTime = expirationTime or 0,
+                    stackCount = applications or 0,
                     group = group,
                     class = class,
                 }
@@ -357,8 +357,24 @@ local function LayoutButtons(entries)
             end
         end
 
+        -- Placement order within the cluster - forward (soonest-expiring
+        -- entry first) normally, since x=0 is the LEFTMOST slot and grows
+        -- rightward, so array-first already lands leftmost. But when
+        -- growLeft is on, x=0 is the RIGHTMOST slot and each subsequent
+        -- icon goes further left - placed forward, the soonest entry
+        -- would land rightmost and the longest-remaining one leftmost,
+        -- which reads as DESCENDING time left-to-right (the bug: 10m
+        -- appearing before 17m/17s). Walking the cluster backward here
+        -- undoes exactly that inversion, so reading left-to-right is
+        -- ascending (soonest first) in both growth directions.
+        local kStart, kEnd, kStep
+        if growLeft then
+            kStart, kEnd, kStep = cluster.last, cluster.first, -1
+        else
+            kStart, kEnd, kStep = cluster.first, cluster.last, 1
+        end
         local k
-        for k = cluster.first, cluster.last do
+        for k = kStart, kEnd, kStep do
             -- Only triggers when a single cluster is wider than rowWidth
             -- all by itself - the cluster-level check above already
             -- guaranteed it starts a fresh row when it needs one.

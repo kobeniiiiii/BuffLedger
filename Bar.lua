@@ -10,6 +10,18 @@ local BL = BuffLedger
 
 if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then
     BL.Print("Requires ClassicAPI (github.com/brues-code/ClassicAPI) or an equivalent client-side mod exposing C_UnitAuras - this client doesn't have it, so BuffLedger can't function. Same requirement pfUI's own buff module has, if you're wondering why pfUI's buffs work but this doesn't.")
+
+    -- The chat line above is easy to miss in login spam - this also
+    -- pops a modal (BL.ShowClassicAPIRequiredPopup, Core.lua) once the
+    -- world has finished loading, same PLAYER_ENTERING_WORLD-gated
+    -- pattern pfUI's own ClassicAPI-required popup uses, so it's one of
+    -- the first things visible instead of a buried print.
+    local f = CreateFrame("Frame")
+    f:RegisterEvent("PLAYER_ENTERING_WORLD")
+    f:SetScript("OnEvent", function()
+        f:UnregisterEvent("PLAYER_ENTERING_WORLD")
+        BL.ShowClassicAPIRequiredPopup()
+    end)
     return
 end
 

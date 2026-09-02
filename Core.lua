@@ -233,6 +233,60 @@ function BL.Print(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cffa335eeBuffLedger:|r " .. msg)
 end
 
+BL.CLASSICAPI_URL = "https://github.com/brues-code/ClassicAPI"
+
+-- CLASSIC_API_VERSION is a global the ClassicAPI mod itself sets once
+-- loaded - the exact signal pfUI's own startup check uses (see pfUI.lua,
+-- same github.com/brues-code/ClassicAPI project) to detect it, more
+-- direct than inferring presence from whether C_UnitAuras happens to
+-- exist as a side effect.
+function BL.HasClassicAPI()
+    return CLASSIC_API_VERSION ~= nil
+end
+
+-- Modal popup (with a selectable/copyable link, same shape as pfUI's
+-- own ClassicAPI-required dialog) plus a chat line, shown once per
+-- session - called from Bar.lua's own top-of-file guard on
+-- PLAYER_ENTERING_WORLD, so this is one of the first things a player
+-- missing ClassicAPI actually sees, not a single line buried in login
+-- spam that's easy to miss (which is what shipped before - see commit
+-- history).
+local shownPopup = false
+function BL.ShowClassicAPIRequiredPopup()
+    if shownPopup then return end
+    shownPopup = true
+
+    local detail
+    if BL.HasClassicAPI() then
+        -- CLASSIC_API_VERSION exists but C_UnitAuras.GetAuraDataByIndex
+        -- still doesn't - shouldn't normally happen, but phrase it
+        -- honestly rather than claiming it's flat-out not installed.
+        detail = "ClassicAPI is loaded, but this client build still doesn't expose the aura API BuffLedger needs. You may need a newer ClassicAPI release:"
+    else
+        detail = "BuffLedger needs |cff33ffccClassicAPI|r to read your buffs, and it isn't installed on this client. Get the latest release from:"
+    end
+
+    StaticPopupDialogs["BUFFLEDGER_CLASSICAPI_REQUIRED"] = {
+        text = "|cffa335eeBuffLedger|r can't run.\n\n" .. detail,
+        button1 = OKAY,
+        hasEditBox = 1,
+        editBoxWidth = 280,
+        timeout = 0,
+        whileDead = 1,
+        hideOnEscape = 1,
+        OnShow = function()
+            local editBox = getglobal(this:GetName() .. "EditBox")
+            if editBox then
+                editBox:SetText(BL.CLASSICAPI_URL)
+                editBox:HighlightText()
+                editBox:SetFocus()
+            end
+        end,
+    }
+    StaticPopup_Show("BUFFLEDGER_CLASSICAPI_REQUIRED")
+    DEFAULT_CHAT_FRAME:AddMessage("|cffa335eeBuffLedger:|r " .. detail .. " " .. BL.CLASSICAPI_URL, 1, 0.3, 0.3)
+end
+
 -- C_UnitAuras.GetAuraDataByIndex allocates a fresh table every single
 -- call - fine for a one-shot scan, but this addon also calls it from
 -- Bar.lua's live refresh loop on every real buff-change event during

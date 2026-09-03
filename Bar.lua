@@ -35,25 +35,6 @@ local lastSignature
 
 -- [ Collecting + sorting ] --------------------------------------------
 
-local function GetVisibleGroups()
-    return {
-        CLASS = BL.GetSetting("showClass") ~= false,
-        WEAPON = BL.GetSetting("showWeapon") ~= false,
-        CONSUMABLE = BL.GetSetting("showConsumable") ~= false,
-        WORLD = BL.GetSetting("showWorld") ~= false,
-        RACIAL = BL.GetSetting("showRacial") ~= false,
-        OTHER = BL.GetSetting("showOther") ~= false,
-    }
-end
-
-local function BuildSortKey(entry)
-    local classPriority = 0
-    if entry.group == "CLASS" then
-        classPriority = BL.CLASS_PRIORITY[entry.class] or 50
-    end
-    return ((BL.GROUP_PRIORITY[entry.group] or 99) * 1000) + classPriority
-end
-
 -- Weapon enchants (sharpening stones, wizard/mana oils, ...) never show
 -- up in the HELPFUL aura list at all - the client tracks them entirely
 -- separately via GetWeaponEnchantInfo(), same as pfUI's own buff module
@@ -63,9 +44,21 @@ end
 -- the API returns) so LayoutButtons/BuildSignature don't need to know
 -- the difference - isWeapon/weaponSlot are the only extra fields, used
 -- by CreateIconButton's tooltip/click handlers below.
-local function CollectWeaponEntries(visible)
+local function CollectWeaponEntries()
     local out = {}
-    if not visible.WEAPON or not GetWeaponEnchantInfo then return out end
+    if not GetWeaponEnchantInfo then return out end
+
+    -- Weapon entries are synthesized, not run through BL.Categorize, so
+    -- they need their own fallback-to-"other" when the Weapon category
+    -- has been deleted - same rule every other buff already gets there,
+    -- just applied by hand since there's no name to look up.
+    local categoryId = "weapon"
+    local cat = BL.GetCategory(categoryId)
+    if not cat then
+        categoryId = "other"
+        cat = BL.GetCategory(categoryId)
+    end
+    if not cat or cat.hidden then return out end
 
     local now = GetTime()
     local hasMH, mhExpire, mhCharges, hasOH, ohExpire, ohCharges = GetWeaponEnchantInfo()
@@ -78,7 +71,7 @@ local function CollectWeaponEntries(visible)
             spellId = nil,
             expirationTime = now + (mhExpire or 0) / 1000,
             stackCount = mhCharges or 0,
-            group = "WEAPON",
+            categoryId = categoryId,
             isWeapon = true,
             weaponSlot = 16,
         })
@@ -92,7 +85,7 @@ local function CollectWeaponEntries(visible)
             spellId = nil,
             expirationTime = now + (ohExpire or 0) / 1000,
             stackCount = ohCharges or 0,
-            group = "WEAPON",
+            categoryId = categoryId,
             isWeapon = true,
             weaponSlot = 17,
         })
@@ -105,15 +98,15 @@ end
 -- shape as pfUI's own RefreshButton loop, since indices past the real
 -- aura count are expected to just return nil, not signal end-of-list.
 local function CollectEntries()
-    local visible = GetVisibleGroups()
     local entries = {}
     local i
     for i = 1, BL.MAX_BUFFS do
         local name, icon, applications, expirationTime, spellId = BL.GetAura("player", i, "HELPFUL")
         if name then
             BL.RecordIcon(name, icon)
-            local group, class = BL.Categorize(name)
-            if visible[group] then
+            local categoryId = BL.Categorize(name)
+            local cat = BL.GetCategory(categoryId)
+            if cat and not cat.hidden then
                 local entry = {
                     index = i,
                     name = name,
@@ -121,19 +114,18 @@ local function CollectEntries()
                     spellId = spellId,
                     expirationTime = expirationTime or 0,
                     stackCount = applications or 0,
-                    group = group,
-                    class = class,
+                    categoryId = categoryId,
                 }
-                entry.sortKey = BuildSortKey(entry)
+                entry.sortKey = BL.CategoryPriority(categoryId)
                 table.insert(entries, entry)
             end
         end
     end
 
-    local weaponEntries = CollectWeaponEntries(visible)
+    local weaponEntries = CollectWeaponEntries()
     for i = 1, table.getn(weaponEntries) do
         local entry = weaponEntries[i]
-        entry.sortKey = BuildSortKey(entry)
+        entry.sortKey = BL.CategoryPriority(entry.categoryId)
         table.insert(entries, entry)
     end
 
@@ -146,7 +138,8 @@ local function CollectEntries()
     -- same instant.
     table.sort(entries, function(a, b)
         if a.sortKey ~= b.sortKey then return a.sortKey < b.sortKey end
-        if a.expirationTime ~= b.expirationTime then return a.expirationTime < b.expirationTime end
+        local aExp, bExp = BL.EffectiveExpiration(a.expirationTime), BL.EffectiveExpiration(b.expirationTime)
+        if aExp ~= bExp then return aExp < bExp end
         return a.name < b.name
     end)
     return entries
@@ -179,6 +172,178 @@ local function FormatTime(sec)
     return string.format("%d", math.floor(sec + 0.5))
 end
 
+-- [ Manual category assignment ] ------------------------------------------
+
+-- Shift-right-click a buff icon (main bar icon or a consolidate
+-- popout's own member tile - see both OnClick handlers below), or type
+-- a name into the Categories Options tab's own "add a buff" box, to
+-- move it into a different category from here on - every live
+-- category (including any custom one), each shown in its own real bar
+-- color so picking one previews exactly what the bar will look like
+-- afterward. Persisted via BL.SetOverride (Core.lua), checked first by
+-- Data.lua's own BL.Categorize ahead of its built-in tables/patterns.
+-- No "reset to default" entry here on purpose - restoring the shipped
+-- category set is a Categories-tab-level action (BL.ConfirmResetCategoriesToDefault),
+-- not a per-buff one.
+-- Exposed on BL (not local) - UI_Options.lua's Categories tab reuses
+-- this verbatim for its own "add a buff by name" flow, so typing a
+-- name and shift-right-clicking a live icon both go through the exact
+-- same assignment path. `onAssigned` is optional (buffName, categoryId) -
+-- the Options window's own "Add a Buff" box uses it to clear its edit
+-- box and refresh its Recent list only once a pick was actually made,
+-- not the instant "Assign" was clicked.
+function BL.ShowCategoryAssignMenu(anchor, buffName, onAssigned)
+    local options = {}
+
+    local order = BL.GetCategoryOrder()
+    local i
+    for i = 1, table.getn(order) do
+        local id = order[i]
+        local cat = BL.GetCategory(id)
+        table.insert(options, {
+            label = cat.name,
+            color = cat.color,
+            onClick = function()
+                BL.SetOverride(buffName, id)
+                BL.ForceRefresh()
+                BL.Print(buffName .. " assigned to " .. cat.name .. ".")
+                if onAssigned then onAssigned(buffName, id) end
+            end,
+        })
+    end
+
+    BL.ShowDropdown(anchor, options)
+end
+
+-- [ Consolidated hover popout ] ------------------------------------------
+
+-- VCB-style: hovering a consolidated icon shows the real member icons
+-- (each with its own timer) in a small row, instead of only a text
+-- list - seeing the actual icons reads faster than names alone, and
+-- each one still has its own real tooltip one hover deeper.
+local popoutButtons = {}
+BL.consolidatePopout = CreateFrame("Frame", "BuffLedgerConsolidatePopout", UIParent)
+-- One strata below GameTooltip's own (TOOLTIP, the highest there is) -
+-- both at TOOLTIP left draw order between them up to chance, and this
+-- popout was winning, burying a member tile's own tooltip behind it.
+-- DIALOG still sits above the bar itself and every other game frame.
+BL.consolidatePopout:SetFrameStrata("DIALOG")
+BL.consolidatePopout:Hide()
+
+local POPOUT_ICON_SIZE = 28
+local POPOUT_SPACING = 3
+local POPOUT_PADDING = 5
+
+-- Driven off an OnUpdate poll of MouseIsOver, not OnEnter/OnLeave -
+-- confirmed elsewhere in this project (CombatLedger's own
+-- SetButtonTooltip) that this client can fail to deliver a matching
+-- Leave/Enter pair between two separate frames, which is exactly what
+-- bridging "left the icon, entered the popout" needs. Polling every
+-- frame is immune to that: it only cares where the cursor actually is
+-- right now, not whether some other frame's event fired. A short
+-- countdown (not an instant hide) covers the few-pixel gap between the
+-- icon and the popout below it, and the anchor button counts as "still
+-- hovering" too so leaving the icon toward the popout never blinks off.
+local hideTimer = nil
+
+BL.consolidatePopout:SetScript("OnUpdate", function()
+    local anchorBtn = BL.consolidatePopout.anchorBtn
+    local hovering = MouseIsOver(BL.consolidatePopout) or (anchorBtn and MouseIsOver(anchorBtn))
+    if hovering then
+        hideTimer = nil
+        return
+    end
+    hideTimer = (hideTimer or 0.2) - arg1
+    if hideTimer <= 0 then
+        hideTimer = nil
+        BL.consolidatePopout:Hide()
+    end
+end)
+
+local function GetPopoutButton(i)
+    if not popoutButtons[i] then
+        local pb = CreateFrame("Button", nil, BL.consolidatePopout)
+        pb:RegisterForClicks("RightButtonUp")
+        pb.texture = pb:CreateTexture(nil, "BORDER")
+        pb.texture:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+        pb.texture:SetAllPoints(pb)
+        pb.timer = pb:CreateFontString(nil, "OVERLAY")
+        -- A member tile shows its OWN real tooltip - the outer
+        -- popout replaces the merged icon's tooltip, not each buff's.
+        pb:SetScript("OnEnter", function()
+            GameTooltip:SetOwner(this, "ANCHOR_TOP")
+            if this.isWeapon then
+                GameTooltip:SetInventoryItem("player", this.weaponSlot)
+            else
+                GameTooltip:SetUnitAura("player", this.buffIndex, "HELPFUL")
+            end
+            GameTooltip:Show()
+        end)
+        pb:SetScript("OnLeave", function()
+            GameTooltip:Hide()
+        end)
+        pb:SetScript("OnClick", function()
+            if IsShiftKeyDown() and this.buffName and not this.isWeapon then
+                BL.ShowCategoryAssignMenu(this, this.buffName)
+            end
+        end)
+        popoutButtons[i] = pb
+    end
+    return popoutButtons[i]
+end
+
+local function ShowConsolidatePopout(anchorBtn, members)
+    BL.consolidatePopout.anchorBtn = anchorBtn
+    hideTimer = nil
+    local fontPath = BL.GetFontPath()
+    local n = table.getn(members)
+    local now = GetTime()
+    local i
+    for i = 1, n do
+        local m = members[i]
+        local pb = GetPopoutButton(i)
+        pb:SetWidth(POPOUT_ICON_SIZE)
+        pb:SetHeight(POPOUT_ICON_SIZE)
+        pb.texture:SetTexture(m.icon)
+        pb.buffIndex = m.index
+        pb.buffName = m.name
+        pb.isWeapon = m.isWeapon
+        pb.weaponSlot = m.weaponSlot
+        pb.timer:SetFont(fontPath, 9, "OUTLINE")
+        pb.timer:ClearAllPoints()
+        pb.timer:SetPoint("TOP", pb, "BOTTOM", 0, -1)
+        if m.expirationTime and m.expirationTime > 0 then
+            local remain = m.expirationTime - now
+            pb.timer:SetText(remain > 0 and FormatTime(remain) or "")
+        else
+            pb.timer:SetText("")
+        end
+
+        local skinTarget = BL.ApplyIconSkin(pb, 1)
+        skinTarget:SetBackdropBorderColor(BL.FLAT_BORDER_R, BL.FLAT_BORDER_G, BL.FLAT_BORDER_B, 1)
+
+        pb:ClearAllPoints()
+        if i == 1 then
+            pb:SetPoint("TOPLEFT", BL.consolidatePopout, "TOPLEFT", POPOUT_PADDING, -POPOUT_PADDING)
+        else
+            pb:SetPoint("LEFT", GetPopoutButton(i - 1), "RIGHT", POPOUT_SPACING, 0)
+        end
+        pb:Show()
+    end
+
+    local j
+    for j = n + 1, table.getn(popoutButtons) do
+        popoutButtons[j]:Hide()
+    end
+
+    BL.consolidatePopout:SetWidth(n * POPOUT_ICON_SIZE + math.max(0, n - 1) * POPOUT_SPACING + POPOUT_PADDING * 2)
+    BL.consolidatePopout:SetHeight(POPOUT_ICON_SIZE + POPOUT_PADDING * 2 + 12)
+    BL.consolidatePopout:ClearAllPoints()
+    BL.consolidatePopout:SetPoint("TOP", anchorBtn, "BOTTOM", 0, -6)
+    BL.ApplyIconSkin(BL.consolidatePopout):SetBackdropBorderColor(BL.FLAT_BORDER_R, BL.FLAT_BORDER_G, BL.FLAT_BORDER_B, 1)
+    BL.consolidatePopout:Show()
+end
+
 -- [ Frame + buttons ] ---------------------------------------------------
 
 BL.frame = CreateFrame("Frame", "BuffLedgerFrame", UIParent)
@@ -201,22 +366,16 @@ local function CreateIconButton(i)
     btn.timer = btn:CreateFontString(nil, "OVERLAY")
 
     btn:SetScript("OnEnter", function()
-        GameTooltip:SetOwner(this, "ANCHOR_BOTTOMRIGHT")
         if this.consolidatedMembers then
             -- A consolidated icon stands in for several real auras at
-            -- once - no single buffIndex/spellId to ask the tooltip API
-            -- about, so the list is built by hand from what LayoutButtons
-            -- recorded for this cluster.
-            GameTooltip:SetText(this.consolidatedTitle or "Buffs")
-            local now = GetTime()
-            local i
-            for i = 1, table.getn(this.consolidatedMembers) do
-                local m = this.consolidatedMembers[i]
-                local remain = m.expirationTime - now
-                local timeStr = (m.expirationTime > 0 and remain > 0) and FormatTime(remain) or ""
-                GameTooltip:AddLine(m.name .. (timeStr ~= "" and ("  |cff999999" .. timeStr .. "|r") or ""), 1, 1, 1)
-            end
-        elseif this.isTest then
+            -- once - show the actual member icons/timers in a popout
+            -- (see ShowConsolidatePopout) instead of a single tooltip.
+            ShowConsolidatePopout(this, this.consolidatedMembers)
+            return
+        end
+
+        GameTooltip:SetOwner(this, "ANCHOR_BOTTOMRIGHT")
+        if this.isTest then
             -- Synthetic /bl test data has no real aura/item behind it to
             -- ask the tooltip API about - just show what it's standing
             -- in for.
@@ -231,8 +390,22 @@ local function CreateIconButton(i)
     end)
     btn:SetScript("OnLeave", function()
         GameTooltip:Hide()
+        -- The popout (if any is showing) manages its own hide timing via
+        -- its OnUpdate poll - it already checks this same button, so
+        -- there's nothing to do here.
     end)
     btn:SetScript("OnClick", function()
+        -- A consolidated icon has no single buffName of its own to
+        -- reassign (it stands in for several buffs at once - reassign
+        -- the individual member tiles in its popout instead), and a
+        -- weapon enchant was never looked up through BL.Categorize in
+        -- the first place, so there's nothing meaningful to reassign it
+        -- to either.
+        if IsShiftKeyDown() and this.buffName and not this.isWeapon and not this.consolidatedMembers then
+            BL.ShowCategoryAssignMenu(this, this.buffName)
+            return
+        end
+
         -- Weapon enchants aren't spells you can cancel this way - nothing
         -- to do here for those (this.spellId is always nil on them).
         if this.spellId and C_Spell and C_Spell.CancelSpellByID then
@@ -251,13 +424,8 @@ local function GetButton(i)
 end
 
 local function GetCategoryColor(entry)
-    if entry.group == "CLASS" then
-        local c = BL.CLASS_COLOR[entry.class]
-        if c then return c.r, c.g, c.b end
-        return 1, 1, 1
-    end
-    local c = BL.GROUP_COLOR[entry.group]
-    if c then return c[1], c[2], c[3] end
+    local cat = BL.GetCategory(entry.categoryId)
+    if cat and cat.color then return cat.color[1], cat.color[2], cat.color[3] end
     return 0.65, 0.65, 0.65
 end
 
@@ -304,12 +472,31 @@ local function UpdateBackground()
 end
 BL.UpdateBackground = UpdateBackground
 
--- Same key for every entry in one visual cluster - each class is its
--- own cluster (not just "CLASS" as a whole), since class is the primary
--- thing this addon sorts by.
+-- The two restriction checkboxes are independent settings, not a
+-- radio pair, but that's harmless: a raid is always also a group, so
+-- checking both just behaves as "only in a raid" (the stricter one) -
+-- there's no actual contradiction to resolve.
+local function ShouldConsolidate()
+    if not BL.GetSetting("consolidate") then return false end
+
+    if BL.GetSetting("consolidateOnlyRaid") then
+        return GetNumRaidMembers and GetNumRaidMembers() > 0
+    end
+
+    if BL.GetSetting("consolidateOnlyGroup") then
+        local inRaid = GetNumRaidMembers and GetNumRaidMembers() > 0
+        local inParty = GetNumPartyMembers and GetNumPartyMembers() > 0
+        return inRaid or inParty
+    end
+
+    return true
+end
+
+-- Same key for every entry in one visual cluster - a plain categoryId
+-- is already fully specific (each class is its own id, not lumped
+-- under one shared "class" bucket), so no composing needed.
 local function CategoryKey(entry)
-    if entry.group == "CLASS" then return "CLASS:" .. tostring(entry.class) end
-    return entry.group
+    return entry.categoryId
 end
 
 -- entries is already sorted so every member of one cluster (same
@@ -369,7 +556,7 @@ local function LayoutButtons(entries)
     local x, row = 0, 0
     local slot = 0
     local firstOnRow = true
-    local consolidate = BL.GetSetting("consolidate")
+    local consolidate = ShouldConsolidate()
     local c
     -- x already carries a trailing `spacing` from the last icon placed
     -- (every icon advances x by size+spacing, cluster boundary or not -
@@ -405,20 +592,33 @@ local function LayoutButtons(entries)
             local members = {}
             local m
             for m = cluster.first, cluster.last do
-                table.insert(members, { name = entries[m].name, expirationTime = entries[m].expirationTime })
+                local e = entries[m]
+                table.insert(members, {
+                    name = e.name,
+                    expirationTime = e.expirationTime,
+                    icon = e.icon,
+                    index = e.index,
+                    isWeapon = e.isWeapon,
+                    weaponSlot = e.weaponSlot,
+                })
             end
-            -- "Paladin" (from the class) or "World"/"Consumable"/... (from
-            -- the group) reads as a tooltip title far better than the raw
-            -- "CLASS - PALADIN" groupLabel string used for the small gray
-            -- isTest subtitle elsewhere.
-            local titleRaw = rep.class or rep.group or "Buffs"
-            local title = string.upper(string.sub(titleRaw, 1, 1)) .. string.lower(string.sub(titleRaw, 2))
+            -- The category's own display name reads as a tooltip title
+            -- far better than a raw id.
+            local title = BL.GetCategoryName(rep.categoryId)
+
+            -- "Whose buffs are these" reads faster from the category's
+            -- own icon than one random member's own icon - falls back
+            -- to the member's icon when the category has none set (the
+            -- shipped "Other" default, or any custom category the user
+            -- hasn't given an icon).
+            local cat = BL.GetCategory(rep.categoryId)
+            local icon = (cat and cat.icon) or rep.icon
+
             table.insert(items, {
-                icon = rep.icon,
+                icon = icon,
                 expirationTime = rep.expirationTime,
                 countText = count,
-                group = rep.group,
-                class = rep.class,
+                categoryId = rep.categoryId,
                 isTest = rep.isTest,
                 consolidatedMembers = members,
                 consolidatedTitle = title,
@@ -448,8 +648,7 @@ local function LayoutButtons(entries)
                     icon = entry.icon,
                     expirationTime = entry.expirationTime,
                     countText = entry.stackCount > 1 and entry.stackCount or "",
-                    group = entry.group,
-                    class = entry.class,
+                    categoryId = entry.categoryId,
                     isTest = entry.isTest,
                     buffIndex = entry.index,
                     buffName = entry.name,
@@ -487,7 +686,7 @@ local function LayoutButtons(entries)
             local btn = GetButton(slot)
             btn.buffIndex = item.buffIndex
             btn.buffName = item.buffName
-            btn.groupLabel = item.class and (item.group .. " - " .. item.class) or item.group
+            btn.groupLabel = BL.GetCategoryName(item.categoryId)
             btn.spellId = item.spellId
             btn.isWeapon = item.isWeapon
             btn.weaponSlot = item.weaponSlot
@@ -593,6 +792,13 @@ BL.frame:RegisterEvent("BUFF_UPDATE_DURATION_SELF")
 -- registers to catch that instead.
 BL.frame:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 BL.frame:RegisterEvent("UNIT_MODEL_CHANGED")
+-- Joining/leaving a party or raid doesn't fire any of the events above
+-- either - without these, ShouldConsolidate's group/raid restriction
+-- could go stale until the player's own buffs happened to change for
+-- an unrelated reason (which might not be for a while, e.g. joining a
+-- raid mid-pull with every buff already applied and stable).
+BL.frame:RegisterEvent("PARTY_MEMBERS_CHANGED")
+BL.frame:RegisterEvent("RAID_ROSTER_UPDATE")
 BL.frame:SetScript("OnEvent", function()
     -- PLAYER_ENTERING_WORLD is forced, not gated like the others - this
     -- client restores SavedVariables AFTER this file's own top-level
@@ -605,7 +811,14 @@ BL.frame:SetScript("OnEvent", function()
     -- "locked" and every other setting stuck showing pre-restore
     -- defaults until your buffs actually change. Forcing here re-lays-
     -- out once real settings are in effect regardless.
-    RefreshBar(event == "PLAYER_ENTERING_WORLD")
+    --
+    -- The roster events are forced too, for the same underlying reason:
+    -- joining/leaving a group doesn't change the player's own buff
+    -- signature at all, so a gated refresh would see "nothing changed"
+    -- and skip re-laying-out even though ShouldConsolidate's answer may
+    -- have just flipped.
+    local force = event == "PLAYER_ENTERING_WORLD" or event == "PARTY_MEMBERS_CHANGED" or event == "RAID_ROSTER_UPDATE"
+    RefreshBar(force)
 end)
 
 -- [ Movable ] --------------------------------------------------------------
@@ -764,19 +977,30 @@ SlashCmdList["BUFFLEDGER"] = function(msg)
             BL.Print("Icon size set to " .. n)
         end
     elseif string.find(msg, "^toggle ") then
-        local group = string.upper(string.sub(msg, 8))
-        local map = { CLASS = "showClass", WEAPON = "showWeapon", CONSUMABLE = "showConsumable", WORLD = "showWorld", RACIAL = "showRacial", OTHER = "showOther" }
-        local key = map[group]
-        if key then
-            local newVal = not (BL.GetSetting(key) ~= false)
-            BL.SetSetting(key, newVal)
+        -- Matches against either the category's id or its display name
+        -- (case-insensitive either way) - generalizes to any custom
+        -- category for free, not just the shipped defaults.
+        local typed = string.lower(string.sub(msg, 8))
+        local order = BL.GetCategoryOrder()
+        local matchId
+        local i
+        for i = 1, table.getn(order) do
+            local id = order[i]
+            local cat = BL.GetCategory(id)
+            if id == typed or string.lower(cat.name) == typed then
+                matchId = id
+            end
+        end
+        if matchId then
+            BL.ToggleCategoryHidden(matchId)
             BL.ForceRefresh()
-            BL.Print(group .. " group " .. (newVal and "shown" or "hidden") .. ".")
+            local cat = BL.GetCategory(matchId)
+            BL.Print(cat.name .. " " .. (cat.hidden and "hidden" or "shown") .. ".")
         else
-            BL.Print("Unknown group. Use: class, weapon, consumable, world, racial, other")
+            BL.Print("Unknown category \"" .. typed .. "\" - check the Categories tab in /bl options for the exact name.")
         end
     else
-        BL.Print("Commands: options, scan, test [0-1|% |off], lock, unlock, reset, scale <n>, columns <n>, size <n>, gap <n>, toggle <class|weapon|consumable|world|racial|other>")
+        BL.Print("Commands: options, scan, test [0-1|% |off], lock, unlock, reset, scale <n>, columns <n>, size <n>, gap <n>, toggle <category name>")
     end
 end
 

@@ -37,17 +37,18 @@ BL.defaultSettings = {
     showDurationInside = false, -- overlay the timer text on the icon instead of below it - mirrors pfUI's own "Show Duration Inside Buff" option, same default (off)
     growLeft = true, -- icons grow from the bar's right edge leftward, matching pfUI's own default buff frame direction - false grows left-to-right instead
     consolidate = false, -- collapse each same-category cluster of 2+ buffs into a single icon (soonest-expiring's icon/timer, a count badge, hover for the full list) instead of one icon per buff
-    showClass = true,
-    showWeapon = true,
-    showConsumable = true,
-    showWorld = true,
-    showRacial = true,
-    showOther = true,
+    consolidateOnlyGroup = false, -- only consolidate while in a party or raid - solo, every cluster shows normally regardless of the setting above
+    consolidateOnlyRaid = false, -- only consolidate while specifically in a raid (stricter than consolidateOnlyGroup - a raid still counts as a group, but a party doesn't count as a raid)
+    -- Per-category visibility used to live here as fixed showClass/
+    -- showWeapon/... booleans - now that categories are fully dynamic
+    -- (Core.lua's category system below), visibility is a `hidden`
+    -- field on each category record instead, so it generalizes to any
+    -- custom category too.
 
     -- Debuff bar - same knobs as the buff bar above, independent values
     -- (own position/size/etc, see DebuffBar.lua), minus anything that
-    -- only makes sense for the buff bar's class/category clustering
-    -- (categoryGap, showClass/showWeapon/...) - the debuff bar has no
+    -- only makes sense for the buff bar's category clustering
+    -- (categoryGap, per-category visibility) - the debuff bar has no
     -- grouping at all, just dispel-type-colored borders.
     debuffLocked = false,
     debuffScale = 1,
@@ -79,6 +80,549 @@ function BL.SetSetting(key, value)
     EnsureSettingsTable()
     BuffLedgerDB.settings[key] = value
 end
+
+-- [ Categories ] -----------------------------------------------------------
+--
+-- Categories are first-class, fully user-editable data - create/delete/
+-- rename/recolor any of them, including the shipped defaults (Data.lua's
+-- BL.DEFAULT_CATEGORIES is seed data, read once to populate this table
+-- and never again - see its own header comment). "other" is the one
+-- exception: it's the permanent catch-all a buff falls back to when its
+-- own category was deleted (or never matched one), so deleting IT is
+-- refused - there always has to be a landing spot.
+local function EnsureCategoriesTable()
+    if not BuffLedgerDB.categories then
+        BuffLedgerDB.categories = {}
+        BuffLedgerDB.categoryOrder = {}
+    end
+end
+
+-- Declared here (not down by BL.GetOverride/SetOverride where it's
+-- primarily used) because BL.DeleteCategory below needs it too, and a
+-- local function can only be seen by code defined AFTER its own
+-- declaration - same reason Bar.lua's FormatTime lives where it does.
+local function EnsureOverridesTable()
+    if not BuffLedgerDB.overrides then
+        BuffLedgerDB.overrides = {}
+    end
+end
+
+-- First-run population only - if BuffLedgerDB.categories already exists
+-- (even empty, even missing every default), this is a no-op, so a
+-- user's edits from a previous session are never overwritten just
+-- because the addon loaded again.
+function BL.EnsureCategoriesSeeded()
+    if BuffLedgerDB.categories then return end
+    EnsureCategoriesTable()
+    local i
+    for i = 1, table.getn(BL.DEFAULT_CATEGORIES) do
+        local def = BL.DEFAULT_CATEGORIES[i]
+        BuffLedgerDB.categories[def.id] = {
+            name = def.name,
+            color = { def.color[1], def.color[2], def.color[3] },
+            icon = def.icon,
+            hidden = false,
+            deletable = def.deletable ~= false,
+            builtin = true,
+        }
+        table.insert(BuffLedgerDB.categoryOrder, def.id)
+    end
+end
+
+-- Re-adds any shipped default category currently missing (deleted) -
+-- the category-level "remember our baseline" - without touching custom
+-- categories or clearing any overrides. A deleted default's old
+-- overrides were already redirected to "other" at delete time (see
+-- BL.DeleteCategory) and stay there; this only restores the category
+-- itself, not what used to point at it.
+--
+-- Also rebuilds categoryOrder rather than just appending restored ids
+-- to the end: every default gets put back in its shipped relative
+-- order (Warrior, Paladin, ... Other), with any custom categories kept
+-- in their existing relative order after them. Appending-only used to
+-- leave the list looking shuffled - e.g. restoring Hunter and Rogue
+-- landed them after Other instead of back between Paladin and Priest
+-- where they belong.
+function BL.ResetCategoriesToDefault()
+    BL.EnsureCategoriesSeeded()
+    local i
+    for i = 1, table.getn(BL.DEFAULT_CATEGORIES) do
+        local def = BL.DEFAULT_CATEGORIES[i]
+        if not BuffLedgerDB.categories[def.id] then
+            BuffLedgerDB.categories[def.id] = {
+                name = def.name,
+                color = { def.color[1], def.color[2], def.color[3] },
+                icon = def.icon,
+                hidden = false,
+                deletable = def.deletable ~= false,
+                builtin = true,
+            }
+        end
+    end
+
+    local newOrder = {}
+    for i = 1, table.getn(BL.DEFAULT_CATEGORIES) do
+        table.insert(newOrder, BL.DEFAULT_CATEGORIES[i].id)
+    end
+    local oldOrder = BuffLedgerDB.categoryOrder
+    for i = 1, table.getn(oldOrder) do
+        local id = oldOrder[i]
+        if BuffLedgerDB.categories[id] and not BuffLedgerDB.categories[id].builtin then
+            table.insert(newOrder, id)
+        end
+    end
+    BuffLedgerDB.categoryOrder = newOrder
+end
+
+-- Confirm-before-acting wrapper around the above - restoring categories
+-- is a bulk action a misclick shouldn't be able to trigger silently.
+-- Same StaticPopupDialogs shape as BL.ShowClassicAPIRequiredPopup below,
+-- just a plain OK/Cancel instead of an edit box.
+StaticPopupDialogs["BUFFLEDGER_RESET_CATEGORIES"] = {
+    text = "Restore any deleted default categories (Warrior, Paladin, ...)? Your custom categories and buff assignments are untouched either way.",
+    button1 = OKAY,
+    button2 = CANCEL,
+    OnAccept = function()
+        BL.ResetCategoriesToDefault()
+        BL.ForceRefresh()
+        -- BL.ForceRefresh only re-renders the live buff bar - the
+        -- Options window (if it's the thing you clicked this from,
+        -- which it always is) needs telling separately or its category
+        -- list just silently sits stale until closed and reopened.
+        if BL.RefreshOptionsWindow then BL.RefreshOptionsWindow() end
+        BL.Print("Default categories restored.")
+    end,
+    timeout = 0,
+    whileDead = 1,
+    hideOnEscape = 1,
+}
+
+function BL.ConfirmResetCategoriesToDefault()
+    StaticPopup_Show("BUFFLEDGER_RESET_CATEGORIES")
+end
+
+-- A small hand-built frame instead of a StaticPopupDialogs hasEditBox=1
+-- entry - two separate attempts at reading that edit box's text back
+-- via getglobal(dialogName.."EditBox") both failed on this client (the
+-- exact reason never fully pinned down - possibly a template quirk
+-- specific to this client's StaticPopup, possibly something about how
+-- OnAccept/OnCancel are invoked vs. a real SetScript handler like
+-- OnShow). Holding a direct Lua reference to the actual EditBox this
+-- code itself created sidesteps the whole class of "guess the right
+-- global name" problem entirely - same reasoning BL.ShowDropdown
+-- already uses instead of Blizzard's UIDropDownMenu.
+local newCategoryPrompt
+
+-- The real, stock ColorPickerFrame, reparented into this prompt instead
+-- of a custom palette - it's a shared global singleton the whole game
+-- (and other addons) can use, so it's borrowed while this prompt is
+-- open and handed back to UIParent (ReleaseColorPicker) the moment it
+-- closes, rather than kept. Its native size isn't something this can
+-- inspect ahead of time without a live client, so the prompt frame is
+-- sized generously and the picker's position may need a follow-up nudge.
+local function ReleaseColorPicker()
+    ColorPickerFrame:Hide()
+    ColorPickerFrame:SetParent(UIParent)
+    ColorPickerFrame:ClearAllPoints()
+    ColorPickerFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+end
+
+local function BuildNewCategoryPrompt()
+    local f = CreateFrame("Frame", "BuffLedgerNewCategoryPrompt", UIParent)
+    f:SetWidth(320)
+    f:SetHeight(300)
+    f:SetPoint("CENTER", UIParent, "CENTER", 0, 40)
+    f:SetFrameStrata("FULLSCREEN_DIALOG")
+    f:SetToplevel(true)
+    f:EnableMouse(true)
+    BL.ApplyIconSkin(f):SetBackdropBorderColor(BL.FLAT_BORDER_R, BL.FLAT_BORDER_G, BL.FLAT_BORDER_B, 1)
+
+    local title = f:CreateFontString(nil, "OVERLAY")
+    title:SetPoint("TOP", f, "TOP", 0, -12)
+    title:SetFont(BL.GetFontPath(), 12, "OUTLINE")
+    title:SetText("New category name:")
+
+    local editBox = CreateFrame("EditBox", "BuffLedgerNewCategoryPromptEditBox", f)
+    editBox:SetHeight(20)
+    editBox:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -32)
+    editBox:SetPoint("TOPRIGHT", f, "TOPRIGHT", -14, -32)
+    editBox:SetAutoFocus(true)
+    editBox:SetFont(BL.GetFontPath(), 11, "OUTLINE")
+    BL.ApplyIconSkin(editBox):SetBackdropBorderColor(BL.FLAT_BORDER_R, BL.FLAT_BORDER_G, BL.FLAT_BORDER_B, 1)
+    f.editBox = editBox
+
+    local selectedColor = { 1, 1, 1 }
+    f.selectedColor = selectedColor
+
+    local function MakeButton(text, width)
+        local btn = CreateFrame("Button", nil, f)
+        btn:SetWidth(width)
+        btn:SetHeight(20)
+        BL.ApplyIconSkin(btn):SetBackdropBorderColor(BL.FLAT_BORDER_R, BL.FLAT_BORDER_G, BL.FLAT_BORDER_B, 1)
+        local label = btn:CreateFontString(nil, "OVERLAY")
+        label:SetAllPoints(btn)
+        label:SetJustifyH("CENTER")
+        label:SetFont(BL.GetFontPath(), 11, "OUTLINE")
+        label:SetText(text)
+        return btn
+    end
+
+    local function Accept()
+        local name = editBox:GetText()
+        f:Hide()
+        ReleaseColorPicker()
+        if not name or name == "" then
+            BL.Print("No category name entered.")
+            return
+        end
+
+        local ok, idOrErr = pcall(BL.CreateCategory, name)
+        if not ok then
+            BL.Print("Failed to create category: " .. tostring(idOrErr))
+            return
+        end
+        BL.SetCategoryColor(idOrErr, selectedColor[1], selectedColor[2], selectedColor[3])
+
+        BL.ForceRefresh()
+        if BL.RefreshOptionsWindow then BL.RefreshOptionsWindow() end
+        BL.Print("Category \"" .. name .. "\" created.")
+    end
+
+    local function CancelPrompt()
+        f:Hide()
+        ReleaseColorPicker()
+    end
+
+    editBox:SetScript("OnEnterPressed", Accept)
+    editBox:SetScript("OnEscapePressed", CancelPrompt)
+
+    local okBtn = MakeButton(OKAY, 80)
+    okBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOM", -4, 12)
+    okBtn:SetScript("OnClick", Accept)
+
+    -- Reparented (not just repositioned) so it's actually a child of
+    -- this prompt, not merely visually overlapping it - .func fires
+    -- continuously while dragging the wheel/slider, so it only ever
+    -- updates the live-tracked color; nothing is committed until this
+    -- prompt's own Okay above is clicked. ColorPickerFrame's own
+    -- internal Okay/Cancel (if this client's build has them, per the
+    -- screenshot showing some) just hide the picker the normal way -
+    -- harmless here since Accept/CancelPrompt call ReleaseColorPicker
+    -- regardless of whether the picker was already hidden.
+    ColorPickerFrame:SetParent(f)
+    ColorPickerFrame:ClearAllPoints()
+    ColorPickerFrame:SetPoint("TOP", f, "TOP", 0, -58)
+    ColorPickerFrame:SetFrameStrata("FULLSCREEN_DIALOG")
+    ColorPickerFrame:SetFrameLevel(f:GetFrameLevel() + 1)
+    ColorPickerFrame.func = function()
+        local r, g, b = ColorPickerFrame:GetColorRGB()
+        selectedColor[1], selectedColor[2], selectedColor[3] = r, g, b
+    end
+    ColorPickerFrame.cancelFunc = function() end
+    ColorPickerFrame.hasOpacity = false
+    ColorPickerFrame:SetColorRGB(1, 1, 1)
+
+    local cancelBtn = MakeButton(CANCEL, 80)
+    cancelBtn:SetPoint("BOTTOMLEFT", f, "BOTTOM", 4, 12)
+    cancelBtn:SetScript("OnClick", CancelPrompt)
+
+    f:Hide()
+    return f
+end
+
+function BL.PromptNewCategory()
+    if not newCategoryPrompt then
+        newCategoryPrompt = BuildNewCategoryPrompt()
+    end
+    newCategoryPrompt.editBox:SetText("")
+    newCategoryPrompt.selectedColor[1] = 1
+    newCategoryPrompt.selectedColor[2] = 1
+    newCategoryPrompt.selectedColor[3] = 1
+    -- The picker may have been reparented back to UIParent by
+    -- ReleaseColorPicker since this prompt was last shown - re-anchor
+    -- it under this prompt every time, not just at first build.
+    ColorPickerFrame:SetParent(newCategoryPrompt)
+    ColorPickerFrame:ClearAllPoints()
+    ColorPickerFrame:SetPoint("TOP", newCategoryPrompt, "TOP", 0, -58)
+    ColorPickerFrame:SetFrameStrata("FULLSCREEN_DIALOG")
+    ColorPickerFrame:SetFrameLevel(newCategoryPrompt:GetFrameLevel() + 1)
+    ColorPickerFrame:SetColorRGB(1, 1, 1)
+    ColorPickerFrame:Show()
+    newCategoryPrompt:Show()
+    newCategoryPrompt.editBox:SetFocus()
+end
+
+function BL.CategoryExists(id)
+    BL.EnsureCategoriesSeeded()
+    return id ~= nil and BuffLedgerDB.categories[id] ~= nil
+end
+
+function BL.GetCategory(id)
+    BL.EnsureCategoriesSeeded()
+    return BuffLedgerDB.categories[id]
+end
+
+function BL.GetCategoryName(id)
+    local cat = BL.GetCategory(id)
+    return (cat and cat.name) or id or "?"
+end
+
+function BL.GetCategoryOrder()
+    BL.EnsureCategoriesSeeded()
+    return BuffLedgerDB.categoryOrder
+end
+
+-- entry.categoryId's position in the display/sort order, or a large
+-- number for a dangling id that somehow isn't in categoryOrder (should
+-- only happen mid-delete, never at rest) - sorts it last rather than
+-- erroring.
+function BL.CategoryPriority(id)
+    BL.EnsureCategoriesSeeded()
+    local order = BuffLedgerDB.categoryOrder
+    local i
+    for i = 1, table.getn(order) do
+        if order[i] == id then return i end
+    end
+    return 9999
+end
+
+local function Slugify(name)
+    local slug = string.lower(name)
+    slug = string.gsub(slug, "[^%w]+", "-")
+    slug = string.gsub(slug, "^%-+", "")
+    slug = string.gsub(slug, "%-+$", "")
+    if slug == "" then slug = "category" end
+    return slug
+end
+
+-- Returns the new category's id. A plain name collision (two different
+-- categories both literally named "Test") gets a numeric suffix on the
+-- id so both can coexist - display names don't have to be unique, ids
+-- do.
+function BL.CreateCategory(name)
+    BL.EnsureCategoriesSeeded()
+    local baseId = Slugify(name)
+    local id = baseId
+    local n = 2
+    while BuffLedgerDB.categories[id] do
+        id = baseId .. "-" .. n
+        n = n + 1
+    end
+    BuffLedgerDB.categories[id] = {
+        name = name,
+        color = { 1, 1, 1 },
+        icon = nil,
+        hidden = false,
+        deletable = true,
+        builtin = false,
+    }
+    table.insert(BuffLedgerDB.categoryOrder, id)
+    return id
+end
+
+-- Refuses "other" and anything else marked non-deletable. Sweeps
+-- BuffLedgerDB.overrides for any entry pointing at this id and clears
+-- it, so nothing is left dangling - those buffs fall through to
+-- BL.Categorize's built-in match (if any, and if that one still
+-- exists) or "other" on the very next categorization call, with no
+-- special-casing needed anywhere else.
+function BL.DeleteCategory(id)
+    BL.EnsureCategoriesSeeded()
+    local cat = BuffLedgerDB.categories[id]
+    if not cat or id == "other" or not cat.deletable then
+        return false
+    end
+
+    BuffLedgerDB.categories[id] = nil
+    local i
+    for i = table.getn(BuffLedgerDB.categoryOrder), 1, -1 do
+        if BuffLedgerDB.categoryOrder[i] == id then
+            table.remove(BuffLedgerDB.categoryOrder, i)
+        end
+    end
+
+    EnsureOverridesTable()
+    local name
+    for name in pairs(BuffLedgerDB.overrides) do
+        if BuffLedgerDB.overrides[name] == id then
+            BuffLedgerDB.overrides[name] = nil
+        end
+    end
+
+    return true
+end
+
+-- A confirm-before-acting wrapper, mirroring BL.ConfirmResetCategoriesToDefault -
+-- deleting is a bulk-ish action (every buff currently in it falls back
+-- to Other) a misclick shouldn't trigger silently. The category id is
+-- kept in a plain upvalue instead of threaded through StaticPopup_Show's
+-- own data-passing convention - after today's OnAccept/this lesson,
+-- relying on the LEAST amount of StaticPopup-specific plumbing possible
+-- is worth the small extra caution, even though ordinary text_arg/data
+-- passing is probably fine (untested, so not worth the risk here).
+local pendingDeleteCategoryId
+
+StaticPopupDialogs["BUFFLEDGER_DELETE_CATEGORY"] = {
+    text = "Delete this category?",
+    button1 = OKAY,
+    button2 = CANCEL,
+    OnAccept = function()
+        if pendingDeleteCategoryId and BL.DeleteCategory(pendingDeleteCategoryId) then
+            BL.ForceRefresh()
+            if BL.RefreshOptionsWindow then BL.RefreshOptionsWindow() end
+        end
+        pendingDeleteCategoryId = nil
+    end,
+    timeout = 0,
+    whileDead = 1,
+    hideOnEscape = 1,
+}
+
+function BL.ConfirmDeleteCategory(id)
+    local cat = BL.GetCategory(id)
+    if not cat then return end
+    pendingDeleteCategoryId = id
+    StaticPopupDialogs["BUFFLEDGER_DELETE_CATEGORY"].text = "Delete \"" .. cat.name .. "\"? Its buffs fall back to Other."
+    StaticPopup_Show("BUFFLEDGER_DELETE_CATEGORY")
+end
+
+-- Drag-to-reorder (UI_Options.lua's Categories tab) - removes id from
+-- wherever it currently sits and reinserts it at newIndex, clamped to
+-- the valid range. This directly IS the buff bar's own sort order
+-- (BL.CategoryPriority reads this same array), so a reorder here takes
+-- effect on the bar the moment something calls BL.ForceRefresh.
+function BL.MoveCategoryToIndex(id, newIndex)
+    BL.EnsureCategoriesSeeded()
+    local order = BuffLedgerDB.categoryOrder
+    local oldIndex
+    local i
+    for i = 1, table.getn(order) do
+        if order[i] == id then oldIndex = i end
+    end
+    if not oldIndex then return end
+
+    table.remove(order, oldIndex)
+    if newIndex < 1 then newIndex = 1 end
+    if newIndex > table.getn(order) + 1 then newIndex = table.getn(order) + 1 end
+    table.insert(order, newIndex, id)
+end
+
+function BL.RenameCategory(id, newName)
+    local cat = BL.GetCategory(id)
+    if cat then cat.name = newName end
+end
+
+-- Shared by Bar.lua/Test.lua/DebuffBar.lua's own within-cluster time
+-- sorts. expirationTime of 0 (or nil) means "no real timer" (a
+-- permanent buff/aura), not "already expired" - sorting it ascending
+-- by raw expirationTime would put it FIRST (0 is smaller than any real
+-- GetTime()-based timestamp), landing permanent buffs on the
+-- soonest-to-expire end of a cluster, which is backwards. This maps
+-- that case to a sentinel far larger than any real timestamp instead,
+-- so permanent buffs sort last (rightmost, in the growLeft default) -
+-- finishing soonest on one end, never finishing on the other. A fixed
+-- large number rather than math.huge, which isn't guaranteed to exist
+-- on this client's Lua 5.0 - not worth the risk for one comparison.
+function BL.EffectiveExpiration(expirationTime)
+    if expirationTime and expirationTime > 0 then
+        return expirationTime
+    end
+    return 1e15
+end
+
+function BL.SetCategoryColor(id, r, g, b)
+    local cat = BL.GetCategory(id)
+    if cat then cat.color = { r, g, b } end
+end
+
+function BL.ToggleCategoryHidden(id)
+    local cat = BL.GetCategory(id)
+    if not cat then return end
+    cat.hidden = not cat.hidden
+end
+
+-- [ Per-buff-name overrides ] -----------------------------------------------
+--
+-- Shift-right-click a buff icon (Bar.lua's ShowCategoryAssignMenu), or
+-- type a name into the Categories tab's "add a buff" box (UI_Options.lua) -
+-- both just call this. Keyed lowercase, same case-insensitive convention
+-- Data.lua's own lookup tables use. Checked first by Data.lua's
+-- BL.Categorize, ahead of every built-in table/pattern there. Value is
+-- a single category id string (not a {group,class} pair - that shape
+-- predates the fully dynamic category system and is migrated below).
+function BL.GetOverride(name)
+    EnsureOverridesTable()
+    return BuffLedgerDB.overrides[string.lower(name)]
+end
+
+-- A running log of assignments (Categories tab's own "Recent" list) -
+-- capped and oldest-trimmed so it can't grow without bound over a long
+-- play session. Recorded once, here, rather than at each of
+-- BL.ShowCategoryAssignMenu's call sites - shift-right-click on the
+-- bar, a popout member tile, and the Categories tab's "Add a Buff" box
+-- all funnel through this one function, so this is the single place
+-- that sees every assignment regardless of how it was made.
+local MAX_ASSIGN_HISTORY = 20
+
+local function EnsureAssignHistoryTable()
+    if not BuffLedgerDB.assignHistory then
+        BuffLedgerDB.assignHistory = {}
+    end
+end
+
+local function RecordAssignHistory(name, categoryId)
+    EnsureAssignHistoryTable()
+    table.insert(BuffLedgerDB.assignHistory, { name = name, categoryId = categoryId, at = time() })
+    while table.getn(BuffLedgerDB.assignHistory) > MAX_ASSIGN_HISTORY do
+        table.remove(BuffLedgerDB.assignHistory, 1)
+    end
+end
+
+-- Oldest-first array - a display wanting "most recent" reads it back
+-- to front, same as BL.GetCategoryOrder callers read that forward.
+function BL.GetAssignHistory()
+    EnsureAssignHistoryTable()
+    return BuffLedgerDB.assignHistory
+end
+
+function BL.SetOverride(name, categoryId)
+    EnsureOverridesTable()
+    BuffLedgerDB.overrides[string.lower(name)] = categoryId
+    RecordAssignHistory(name, categoryId)
+end
+
+function BL.ClearOverride(name)
+    EnsureOverridesTable()
+    BuffLedgerDB.overrides[string.lower(name)] = nil
+end
+
+-- One-time migration for overrides saved by the pre-category-system
+-- shift-right-click feature ({group=..., class=...} tables) into the
+-- new single-id shape. Runs every load but is a no-op after the first
+-- time, since every value is a string from then on.
+local function MigrateOverrides()
+    EnsureOverridesTable()
+    local name, value
+    for name, value in pairs(BuffLedgerDB.overrides) do
+        if type(value) == "table" then
+            local id
+            if value.group == "CLASS" and value.class then
+                id = string.lower(value.class)
+            elseif value.group then
+                id = string.lower(value.group)
+            end
+            BuffLedgerDB.overrides[name] = id
+        end
+    end
+end
+
+-- Not BL.EnsureCategoriesSeeded() here too - it reads BL.DEFAULT_CATEGORIES,
+-- which doesn't exist yet this early (Data.lua, where that table lives,
+-- loads AFTER Core.lua per the .toc order). Every category function
+-- above calls it lazily on its own first real use instead, by which
+-- point Data.lua has always already loaded. MigrateOverrides has no
+-- such dependency, so it's safe to just run once, right here.
+MigrateOverrides()
 
 local function EnsureLayoutTable()
     if not BuffLedgerDB.layout then
@@ -392,7 +936,8 @@ function BL.CloseDropdown()
     if dropdownCatcher then dropdownCatcher:Hide() end
 end
 
--- `options` is an array of { label, onClick }. Opens above `anchor`
+-- `options` is an array of { label, onClick, color }. `color` is
+-- optional ({r,g,b}, 0-1) - defaults to white when omitted. Opens above `anchor`
 -- instead of below it when there isn't room below to fit on screen.
 function BL.ShowDropdown(anchor, options)
     if not dropdownCatcher then
@@ -457,7 +1002,12 @@ function BL.ShowDropdown(anchor, options)
         row:SetPoint("TOPRIGHT", dropdownFrame, "TOPRIGHT", -3, -3 - (i - 1) * ROW_H)
         row.text:SetFont(BL.GetFontPath(), 11, "OUTLINE")
         row.text:SetText(options[i].label)
-        row.text:SetTextColor(1, 1, 1)
+        local color = options[i].color
+        if color then
+            row.text:SetTextColor(color[1], color[2], color[3])
+        else
+            row.text:SetTextColor(1, 1, 1)
+        end
         local onClick = options[i].onClick
         row:SetScript("OnClick", function()
             BL.CloseDropdown()

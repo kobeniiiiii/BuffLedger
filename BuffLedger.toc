@@ -1,8 +1,8 @@
 ## Interface: 11200
 ## Title: |cffa335eeBuffLedger|r by |cffff0000K|r|cffff7f00o|r|cffffff00b|r|cff00ff00e|r|cff0080ffn|r|cff8b00ffi|r
-## Notes: Standalone buff and debuff bar replacing Blizzard's (and pfUI's) own player buff frame - sorts and color-codes buffs by who gave them to you (which class), weapon enchants, world buffs, consumables, and racials instead of raw aura order; debuffs get their own bar color-coded by dispel type. Styled after pfUI (bundled assets, not a live dependency) with full manual control over font/size/borders/layout.
+## Notes: Fully editable, consolidated buff and debuff bar replacing Blizzard's (and pfUI's) own player buff frame. Buffs sort into color-coded categories you fully control - rename, recolor, reorder, delete, or create your own, and reassign any buff to any category by hand. Crowded categories collapse into one icon on request. Debuffs get their own bar, color-coded by dispel type. Styled after pfUI (bundled assets, not a live dependency) with full manual control over font/size/borders/layout.
 ## Author: kobeniiiiii
-## Version: 0.3.0
+## Version: 0.5.0
 ## OptionalDeps: pfUI
 ## SavedVariables: BuffLedgerDB
 

@@ -1,8 +1,35 @@
 # BuffLedger
 
-A standalone buff bar for vanilla WoW 1.12 (Turtle-based servers) that sorts your buffs by something meaningful - which class gave you a buff, not the raw order the client happens to report auras in - instead of Blizzard's default row. Class buffs, weapon enchants, consumables, world buffs, and racials each get their own color-coded cluster. A separate debuff bar (own Options tab, no sorting/grouping) shows what's on you the same way. Replaces Blizzard's stock buff/debuff icons outright, and pfUI's own buff/debuff display too if pfUI is loaded - only ever one set of icons on screen, regardless of what else is installed.
+A buff bar for vanilla WoW 1.12 (Turtle-based servers) that actually organizes your buffs - grouped into color-coded categories instead of Blizzard's raw, meaningless aura order - and lets you bend that organization to whatever you actually want. Rename a category, recolor it, reorder it, delete it, or build your own from scratch. Reassign any single buff to any category, any time, in two clicks. When a category gets crowded, collapse it into one icon with a badge instead of a wall of clutter. None of this is hardcoded - it's your bar, edited the way you'd edit anything else.
 
-![Buff icons grouped and color-coded by category, with gaps between clusters](screenshots/main.png)
+A matching debuff bar shows what's on you the same way, color-coded by dispel type.
+
+![Buffs grouped and color-coded by category, with gaps between clusters](screenshots/main.png)
+
+## Fully editable categories
+
+Warrior, Paladin, Hunter, Rogue, Priest, Shaman, Mage, Warlock, Druid, Weapon, Consumable, World, Other - the defaults you start with aren't special. Every one of them is just data, and every one of them can be changed:
+
+- **Recolor** - click a category's color swatch, pick a color, done.
+- **Rename** or **delete** - delete anything except Other, which is the one permanent catch-all everything falls back to. Deleting a category never deletes the buffs in it - they just land in Other until you put them somewhere else.
+- **Reorder** - drag a category up or down in the list and the buff bar re-sorts to match, immediately.
+- **Create your own** - "+ New Category" gets you a name and a full stock color-wheel picker, together, in one step.
+- **Reassign a buff** - shift-right-click any icon on the bar (or a member icon inside a consolidated popout) and pick a category from a color-coded dropdown. Don't have the buff active right now? Type its name into the Categories tab's "Add a Buff" box instead - same dropdown, no need to wait for a raid.
+- **Full history** - every reassignment, however you made it, is logged. Open it from the Categories tab, and right-click any entry to send that buff somewhere else again.
+
+![The Categories tab - recolor, reorder, delete, or add a category, plus an assignment history](screenshots/categories.png)
+
+![Shift-right-click any buff to reassign it on the spot](screenshots/reassign.png)
+
+Nothing here touches BuffLedger's own built-in recognition data (~300 buff names and counting, covering most of what you'll actually see). That data is what a deleted default category's buffs fall back to Other *from* - delete your Paladin category and a future update can still teach BuffLedger a new Paladin buff, it just won't matter for you until you bring Paladin back (Categories tab → Reset to Default, which restores any missing defaults without touching your custom ones or anything you've already reassigned).
+
+## Consolidation
+
+Once a category's cluster gets past a couple of icons - a 40-man raid buffing you with everything a class has - it can eat a lot of bar. Turn on Consolidate (Buff Bar Options) and any cluster of 2+ collapses into a single icon: a count badge, the timer of whichever buff in it is closest to falling off, and a hover popout showing the real icon and timer for every member. Nothing is hidden, just tucked one hover deeper.
+
+![A consolidated cluster - one icon, a count badge, and the real members on hover](screenshots/consolidated.png)
+
+Two sub-options scope it to when it's actually useful: only while grouped (party or raid), or only while specifically in a raid - so a quiet solo bar can stay uncollapsed and only tidy itself up when things would otherwise get crowded.
 
 ## Requires
 
@@ -13,34 +40,36 @@ A standalone buff bar for vanilla WoW 1.12 (Turtle-based servers) that sorts you
 1. Copy the `BuffLedger` folder into `Interface/AddOns/`
 2. Enable BuffLedger at the character select addon list
 
-Looks like pfUI by default - the flat near-black border, drop shadow, and Expressway font are bundled straight from pfUI's own files, so it looks right whether or not pfUI is actually installed. Everything is still fully configurable from its own Options window regardless (see below) - it never reads pfUI's live settings, so pfUI being installed doesn't override anything you set here.
+Looks like pfUI by default - the flat near-black border, drop shadow, and Expressway font are bundled straight from pfUI's own files, so it looks right whether or not pfUI is actually installed. Everything is still fully configurable from its own Options window regardless - it never reads pfUI's live settings, so pfUI being installed doesn't override anything you set here. Replaces Blizzard's stock buff/debuff icons outright, and pfUI's own buff/debuff display too if pfUI is loaded - only ever one set of icons on screen, no matter what else is installed.
 
 ## Usage
 
-Drag either bar to reposition it (both start unlocked). `/bl options` opens a full settings window with a tab for each bar - icon size, spacing, columns, font, text size, border thickness, scale, growth direction, and a background panel toggle for both; the buff bar's tab also has a category gap slider, since it's the only one that groups icons into clusters.
+Drag either bar to reposition it (both start unlocked). `/bl options` opens the full settings window - Buff Bar and Debuff Bar tabs cover icon size, spacing, columns, font, text size, border thickness, scale, growth direction, and consolidation; the Categories tab covers everything above.
 
 - `/bl` or `/buffledger` - full command list
-- `/bl options` (or `/bl opt`, `/bl config`) - settings window (buff bar and debuff bar tabs)
+- `/bl options` (or `/bl opt`, `/bl config`) - settings window (Buff Bar, Debuff Bar, and Categories tabs)
 - `/bl lock` / `/bl unlock` - lock the buff bar in place, or free it to drag again (the debuff bar's lock is in its Options tab)
 - `/bl reset` - reset buff bar position (the debuff bar has its own Reset Position button in its Options tab)
 - `/bl scan` - scans your current raid/party and reports any buffs it doesn't recognize yet, with a guess at which class they belong to
 - `/bl auras` - raw dump of every one of your own buffs and debuffs straight from the aura API (name, slot index, dispel type, time left) - a troubleshooting command for "why isn't this specific buff/debuff showing up on the bar"
 - `/bl test [0-1 | % | off]` - preview a shuffled sample of every buff this addon knows about, without needing a raid to actually hold them all at once
-- `/bl toggle <class|weapon|consumable|world|racial|other>` - show/hide one category
+- `/bl toggle <category name>` - show/hide one category, default or custom
+
+## The debuff bar
+
+A separate bar for what's on *you* - no categories, no sorting by source, since "who cast this on me" isn't a useful question for a debuff the way it is for a buff. Instead it's ordered by time remaining (shortest on the left, longest on the right) and each border is color-coded by dispel type - Magic, Curse, Poison, Disease - the same colors Blizzard's own tooltips use, so you can tell what's dispellable at a glance. Its own Options tab covers position, size, spacing, font, and lock, independently of the buff bar.
 
 ## How it works
 
-The client's aura API has no concept of "who gave you this buff" - it's just a name, icon, and duration. BuffLedger keeps its own lookup table (`Data.lua`) mapping buff names to a source: a specific class, a world buff, a consumable, a racial, or "other" for anything unrecognized. Weapon enchants (sharpening stones, wizard oils, ...) aren't auras at all on this client, so those are read separately via `GetWeaponEnchantInfo()` and shown as their own category.
+The client's aura API has no concept of "who gave you this buff" - it's just a name, icon, and duration. BuffLedger keeps a lookup table (`Data.lua`) mapping buff names to a default category - a specific class, a world buff, a consumable, or Other for anything unrecognized (racials included - there aren't enough of them to earn their own category). That's only the *starting point* - see Fully editable categories above for how completely it can be overridden. Weapon enchants (sharpening stones, wizard oils, ...) aren't auras at all on this client, so those are read separately via `GetWeaponEnchantInfo()` and shown as their own category.
 
-- **Grouped, not just sorted** - buffs from the same source sit together as one visual cluster, with a configurable gap between clusters. A cluster never splits across rows just because one ran out of horizontal room; it moves to the next row as a whole.
-- **Color-coded borders** - class buffs take that class's actual class color; every other category gets its own fixed color (gold for world buffs, green for consumables, etc).
-- **Sorted by time remaining within each cluster** - the buff closest to falling off is the most visually prominent one, not buried by alphabetical accident.
-- **Consolidate same-category buffs** (Options, off by default) - collapse a cluster of 2+ buffs down to one icon with a count badge (e.g. "5" for five active Paladin buffs) instead of one icon per buff. The icon shown is whichever one is closest to falling off; hover it for the full list with individual timers. A big raid buff bar can get crowded - this is the fix for that without losing any information, just tucking it behind a hover.
+- **Grouped, not just sorted** - buffs from the same category sit together as one visual cluster, with a configurable gap between clusters. A cluster never splits across rows just because one ran out of horizontal room; it moves to the next row as a whole.
+- **Sorted by time remaining within each cluster** - the buff closest to falling off is the most visually prominent one, not buried by alphabetical accident. A buff with no real timer (a permanent effect) sorts to the far end of its cluster instead, since it's never the one you need to react to first.
 - **`/bl scan`** turns "is this buff in the lookup table yet" from a one-at-a-time guessing game into a single command - point it at a full raid and it'll tell you exactly which buffs it doesn't recognize, and which class it thinks each one belongs to.
 
 ## Known limitations
 
-- The name-to-class table is hand-maintained. Most standard buffs are already in it, but a private server's custom content can always add something new - if a buff lands in the generic "Other" bucket, that's what happened. `/bl scan` is the fastest way to find and fix these.
+- The built-in name-to-category table is hand-maintained. Most standard buffs are already in it, but a private server's custom content can always add something new - if a buff lands in the generic "Other" bucket, that's what happened. `/bl scan` is the fastest way to find these, and shift-right-click (or the Categories tab's Add a Buff box) is the fastest way to fix them yourself without waiting on an update.
 - A few consumables display under a short generic effect name in-game rather than the item's own name (e.g. Cerebral Cortex Compound's actual buff is "Infallible Mind") - most of these are already accounted for, but this is a real limitation of matching by aura name at all, not a bug.
 - `/bl scan`'s raid-wide read assumes `C_UnitAuras.GetAuraDataByIndex` works against non-player unit tokens (`raid1`, `raid2`, ...) the same way it does for `"player"`. Every confirmed use elsewhere on this client only ever calls it with `"player"`, so this hasn't been independently verified.
 

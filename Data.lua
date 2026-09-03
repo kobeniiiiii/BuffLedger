@@ -17,41 +17,45 @@
 BuffLedger = BuffLedger or {}
 local BL = BuffLedger
 
-BL.CLASS_ORDER = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
-
-BL.CLASS_PRIORITY = {}
-do
-    local i
-    for i = 1, table.getn(BL.CLASS_ORDER) do
-        BL.CLASS_PRIORITY[BL.CLASS_ORDER[i]] = i
-    end
-end
-
-BL.CLASS_COLOR = {
-    WARRIOR = { r = 0.78, g = 0.61, b = 0.43 },
-    PALADIN = { r = 0.96, g = 0.55, b = 0.73 },
-    HUNTER  = { r = 0.67, g = 0.83, b = 0.45 },
-    ROGUE   = { r = 1.00, g = 0.96, b = 0.41 },
-    PRIEST  = { r = 1.00, g = 1.00, b = 1.00 },
-    SHAMAN  = { r = 0.00, g = 0.44, b = 0.87 },
-    MAGE    = { r = 0.41, g = 0.80, b = 0.94 },
-    WARLOCK = { r = 0.58, g = 0.51, b = 0.79 },
-    DRUID   = { r = 1.00, g = 0.49, b = 0.04 },
-}
-
--- Order: class buffs first (the thing you asked to sort by), then
--- weapon enchants, then consumables, then world buffs / racials /
--- everything else. WEAPON isn't from C_UnitAuras at all - see Bar.lua's
--- CollectWeaponEntries, which reads GetWeaponEnchantInfo() instead and
--- builds synthetic entries tagged with this same group.
-BL.GROUP_PRIORITY = { CLASS = 1, WEAPON = 2, CONSUMABLE = 3, WORLD = 4, RACIAL = 5, OTHER = 6 }
-
-BL.GROUP_COLOR = {
-    WEAPON     = { 0.20, 0.85, 0.85 },
-    CONSUMABLE = { 0.30, 1.00, 0.40 },
-    WORLD      = { 1.00, 0.82, 0.00 },
-    RACIAL     = { 0.60, 0.60, 0.90 },
-    OTHER      = { 0.65, 0.65, 0.65 },
+-- The shipped starting categories - seed data only, read exactly once
+-- by Core.lua's BL.EnsureCategoriesSeeded (first run) or on demand by
+-- BL.ResetCategoriesToDefault, to populate the LIVE, user-editable
+-- BuffLedgerDB.categories/categoryOrder (Core.lua). Never read directly
+-- by Bar.lua or anything else at render time - once seeded, the
+-- SavedVariables copy is the only source of truth, so a user can
+-- rename/recolor/delete any of these (even "other", though deleting it
+-- specifically is refused - it's the permanent catch-all) without this
+-- table changing underneath them. `id` doubles as the buff-name lookup
+-- key BL.BuiltinCategorize below returns (lowercase class token or
+-- group name) and as the dropdown ordering (array order = display
+-- order). `deletable` defaults to true when omitted - only "other"
+-- sets it false.
+--
+-- Class icons are real, ordinary stock spell icons - not a custom
+-- class-icon atlas texture, after two attempts at that (a pfUI-bundled
+-- replacement image) rendered wrong/garbled in-game despite measuring
+-- out correct on a direct pixel inspection of the file. A plain
+-- "Interface\Icons\..." path is the exact same rendering path every
+-- other buff icon in this addon already uses successfully. The three
+-- non-class icons are likewise real, well-known vanilla items/spells:
+-- Elemental Sharpening Stone (Weapon), Flask of the Titans
+-- (Consumable), Rallying Cry of the Dragonslayer (World). Racials used
+-- to be their own group, but there aren't enough of them to earn a
+-- dedicated bucket - BUFF_RACIAL below now categorizes into "other".
+BL.DEFAULT_CATEGORIES = {
+    { id = "warrior", name = "Warrior", color = { 0.78, 0.61, 0.43 }, icon = "Interface\\Icons\\Ability_Warrior_Rampage" },
+    { id = "paladin", name = "Paladin", color = { 0.96, 0.55, 0.73 }, icon = "Interface\\Icons\\Spell_Holy_HolyBolt" },
+    { id = "hunter", name = "Hunter", color = { 0.67, 0.83, 0.45 }, icon = "Interface\\Icons\\Ability_Hunter_BeastTaming" },
+    { id = "rogue", name = "Rogue", color = { 1.00, 0.96, 0.41 }, icon = "Interface\\Icons\\Ability_Stealth" },
+    { id = "priest", name = "Priest", color = { 1.00, 1.00, 1.00 }, icon = "Interface\\Icons\\Spell_Holy_WordFortitude" },
+    { id = "shaman", name = "Shaman", color = { 0.00, 0.44, 0.87 }, icon = "Interface\\Icons\\Spell_Nature_BloodLust" },
+    { id = "mage", name = "Mage", color = { 0.41, 0.80, 0.94 }, icon = "Interface\\Icons\\Spell_Fire_FlameBolt" },
+    { id = "warlock", name = "Warlock", color = { 0.58, 0.51, 0.79 }, icon = "Interface\\Icons\\Spell_Shadow_ShadowBolt" },
+    { id = "druid", name = "Druid", color = { 1.00, 0.49, 0.04 }, icon = "Interface\\Icons\\Ability_Racial_BearForm" },
+    { id = "weapon", name = "Weapon", color = { 0.20, 0.85, 0.85 }, icon = "Interface\\Icons\\INV_Stone_02" },
+    { id = "consumable", name = "Consumable", color = { 0.30, 1.00, 0.40 }, icon = "Interface\\Icons\\INV_Potion_62" },
+    { id = "world", name = "World", color = { 1.00, 0.82, 0.00 }, icon = "Interface\\Icons\\INV_Misc_Head_Dragon_01" },
+    { id = "other", name = "Other", color = { 0.65, 0.65, 0.65 }, icon = nil, deletable = false },
 }
 
 -- Exact buff name -> class token. Ranked spells (Fortitude, Blessing of
@@ -294,28 +298,32 @@ do
     end
 end
 
--- name -> group, class (class only meaningful when group == "CLASS")
-function BL.Categorize(name)
-    if not name or name == "" then
-        return "OTHER"
-    end
+-- name -> category id (lowercase, matching a BL.DEFAULT_CATEGORIES id).
+-- Pure name-matching only - doesn't know or care whether the matched
+-- category still exists in BuffLedgerDB.categories (a user may have
+-- deleted it). That check belongs to the public BL.Categorize wrapper
+-- below, which is the only thing that should ever be called elsewhere -
+-- keeping the two separate means this table/pattern waterfall (and any
+-- future entries added to it) never needs to change just because
+-- category existence is now something that can vary at runtime.
+local function BuiltinCategorize(name)
     local lname = string.lower(name)
 
     local class = BUFF_CLASS_LOWER[lname]
     if class then
-        return "CLASS", class
+        return string.lower(class)
     end
 
     if BUFF_RACIAL_LOWER[lname] then
-        return "RACIAL"
+        return "other"
     end
 
     if BUFF_WORLD_LOWER[lname] or string.find(lname, "sayge's dark fortune", 1, true) then
-        return "WORLD"
+        return "world"
     end
 
     if BUFF_CONSUMABLE_LOWER[lname] then
-        return "CONSUMABLE"
+        return "consumable"
     end
 
     -- Family-pattern fallbacks - these classes have far more named
@@ -330,21 +338,46 @@ function BL.Categorize(name)
     -- regular blessings/seals.
     if string.find(lname, "blessing of", 1, true) or string.find(lname, "seal of", 1, true)
         or string.find(lname, "hand of", 1, true) then
-        return "CLASS", "PALADIN"
+        return "paladin"
     end
     if string.find(lname, "totem", 1, true) then
-        return "CLASS", "SHAMAN"
+        return "shaman"
     end
     if string.find(lname, "aspect of", 1, true) then
-        return "CLASS", "HUNTER"
+        return "hunter"
     end
 
     local i
     for i = 1, table.getn(CONSUMABLE_SUBSTRINGS_LOWER) do
         if string.find(lname, CONSUMABLE_SUBSTRINGS_LOWER[i], 1, true) then
-            return "CONSUMABLE"
+            return "consumable"
         end
     end
 
-    return "OTHER"
+    return "other"
+end
+
+-- The only categorization entry point anything outside this file
+-- should call. A user's own shift-right-click/typed-name assignment
+-- (BL.SetOverride, Core.lua) always wins when set and still valid -
+-- that's the entire point of being able to override in the first
+-- place. Otherwise falls through to the built-in name match above, but
+-- only if that category hasn't been deleted - and finally to "other",
+-- which always exists (deleting it is refused).
+function BL.Categorize(name)
+    if not name or name == "" then
+        return "other"
+    end
+
+    local overrideId = BL.GetOverride(name)
+    if overrideId and BL.CategoryExists(overrideId) then
+        return overrideId
+    end
+
+    local candidate = BuiltinCategorize(name)
+    if BL.CategoryExists(candidate) then
+        return candidate
+    end
+
+    return "other"
 end

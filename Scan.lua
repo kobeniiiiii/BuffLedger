@@ -71,7 +71,7 @@ function BL.ScanRaidBuffs()
     local unresolved = {}
     local name, rec
     for name, rec in pairs(found) do
-        if BL.Categorize(name) == "OTHER" then
+        if BL.Categorize(name) == "other" then
             table.insert(unresolved, { name = name, rec = rec })
         end
     end

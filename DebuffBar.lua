@@ -73,7 +73,8 @@ local function CollectDebuffs()
     -- tie-break for a stable order between debuffs expiring at the
     -- same instant.
     table.sort(entries, function(a, b)
-        if a.expirationTime ~= b.expirationTime then return a.expirationTime < b.expirationTime end
+        local aExp, bExp = BL.EffectiveExpiration(a.expirationTime), BL.EffectiveExpiration(b.expirationTime)
+        if aExp ~= bExp then return aExp < bExp end
         return a.name < b.name
     end)
 

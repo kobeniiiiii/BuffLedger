@@ -63,16 +63,6 @@ local function BuildAllKnownBuffNames()
     return list
 end
 
--- Mirrors Bar.lua's own (local, unexported) BuildSortKey - duplicated
--- rather than restructuring that module boundary for one small formula.
-local function BuildSortKey(entry)
-    local classPriority = 0
-    if entry.group == "CLASS" then
-        classPriority = BL.CLASS_PRIORITY[entry.class] or 50
-    end
-    return ((BL.GROUP_PRIORITY[entry.group] or 99) * 1000) + classPriority
-end
-
 local function ShuffledCopy(list)
     local out = {}
     local i
@@ -99,7 +89,7 @@ function BL.StartTest(fraction)
     local i
     for i = 1, want do
         local name = names[i]
-        local group, class = BL.Categorize(name)
+        local categoryId = BL.Categorize(name)
         local cachedIcon = BL.GetCachedIcon(name)
         if cachedIcon then realIcons = realIcons + 1 end
         local entry = {
@@ -109,11 +99,10 @@ function BL.StartTest(fraction)
             spellId = nil,
             expirationTime = now + math.random(60, 3600),
             stackCount = (math.random(100) > 85) and math.random(2, 5) or 0,
-            group = group,
-            class = class,
+            categoryId = categoryId,
             isTest = true,
         }
-        entry.sortKey = BuildSortKey(entry)
+        entry.sortKey = BL.CategoryPriority(categoryId)
         table.insert(entries, entry)
     end
 
@@ -122,7 +111,8 @@ function BL.StartTest(fraction)
     -- give this a real chance to be visibly exercised in test mode.
     table.sort(entries, function(a, b)
         if a.sortKey ~= b.sortKey then return a.sortKey < b.sortKey end
-        if a.expirationTime ~= b.expirationTime then return a.expirationTime < b.expirationTime end
+        local aExp, bExp = BL.EffectiveExpiration(a.expirationTime), BL.EffectiveExpiration(b.expirationTime)
+        if aExp ~= bExp then return aExp < bExp end
         return a.name < b.name
     end)
 

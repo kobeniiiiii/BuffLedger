@@ -24,6 +24,7 @@ BuffLedgerDB.settings = BuffLedgerDB.settings or {}
 BL.db = BuffLedgerDB
 
 BL.defaultSettings = {
+    showMinimapButton = true,
     locked = false,
     scale = 1,
     iconSize = 30,
@@ -108,24 +109,45 @@ local function EnsureOverridesTable()
 end
 
 -- First-run population only - if BuffLedgerDB.categories already exists
--- (even empty, even missing every default), this is a no-op, so a
--- user's edits from a previous session are never overwritten just
--- because the addon loaded again.
+-- (even empty, even missing every default), the seeding half is a
+-- no-op, so a user's edits from a previous session are never
+-- overwritten just because the addon loaded again.
+--
+-- The second half runs every call, seed or not: a one-time backfill
+-- for categories saved before the per-category `consolidate` flag
+-- existed (this addon used to have one global on/off setting instead
+-- of "consolidate Consumable but not Warrior"). Inherits that old
+-- global value once per category (nil is the only way to tell "never
+-- migrated" from "migrated to false"), so upgrading doesn't silently
+-- turn consolidation off for anyone who had it on everywhere. Cheap
+-- once every category has a real true/false here, which happens after
+-- the first call post-upgrade.
 function BL.EnsureCategoriesSeeded()
-    if BuffLedgerDB.categories then return end
-    EnsureCategoriesTable()
-    local i
-    for i = 1, table.getn(BL.DEFAULT_CATEGORIES) do
-        local def = BL.DEFAULT_CATEGORIES[i]
-        BuffLedgerDB.categories[def.id] = {
-            name = def.name,
-            color = { def.color[1], def.color[2], def.color[3] },
-            icon = def.icon,
-            hidden = false,
-            deletable = def.deletable ~= false,
-            builtin = true,
-        }
-        table.insert(BuffLedgerDB.categoryOrder, def.id)
+    if not BuffLedgerDB.categories then
+        EnsureCategoriesTable()
+        local i
+        for i = 1, table.getn(BL.DEFAULT_CATEGORIES) do
+            local def = BL.DEFAULT_CATEGORIES[i]
+            BuffLedgerDB.categories[def.id] = {
+                name = def.name,
+                color = { def.color[1], def.color[2], def.color[3] },
+                icon = def.icon,
+                hidden = false,
+                consolidate = false,
+                deletable = def.deletable ~= false,
+                builtin = true,
+            }
+            table.insert(BuffLedgerDB.categoryOrder, def.id)
+        end
+        return
+    end
+
+    local oldGlobal = BL.GetSetting("consolidate") and true or false
+    local id, cat
+    for id, cat in pairs(BuffLedgerDB.categories) do
+        if cat.consolidate == nil then
+            cat.consolidate = oldGlobal
+        end
     end
 end
 
@@ -154,6 +176,7 @@ function BL.ResetCategoriesToDefault()
                 color = { def.color[1], def.color[2], def.color[3] },
                 icon = def.icon,
                 hidden = false,
+                consolidate = false,
                 deletable = def.deletable ~= false,
                 builtin = true,
             }
@@ -413,6 +436,7 @@ function BL.CreateCategory(name)
         color = { 1, 1, 1 },
         icon = nil,
         hidden = false,
+        consolidate = false,
         deletable = true,
         builtin = false,
     }
@@ -507,6 +531,16 @@ function BL.MoveCategoryToIndex(id, newIndex)
     table.insert(order, newIndex, id)
 end
 
+-- "Consolidate All"/"Consolidate None" (UI_Options.lua's Categories
+-- tab) - a quick bulk override instead of clicking every row by hand.
+function BL.SetAllCategoriesConsolidate(value)
+    BL.EnsureCategoriesSeeded()
+    local id, cat
+    for id, cat in pairs(BuffLedgerDB.categories) do
+        cat.consolidate = value
+    end
+end
+
 function BL.RenameCategory(id, newName)
     local cat = BL.GetCategory(id)
     if cat then cat.name = newName end
@@ -539,6 +573,12 @@ function BL.ToggleCategoryHidden(id)
     local cat = BL.GetCategory(id)
     if not cat then return end
     cat.hidden = not cat.hidden
+end
+
+function BL.ToggleCategoryConsolidate(id)
+    local cat = BL.GetCategory(id)
+    if not cat then return end
+    cat.consolidate = not cat.consolidate
 end
 
 -- [ Per-buff-name overrides ] -----------------------------------------------

@@ -266,12 +266,16 @@ local function BuildBuffTab(page)
     local y = CONTENT_TOP
 
     AddCheckboxRow(page, "Locked (no dragging)", "locked", y); y = y + ROW_HEIGHT
+    AddCheckboxRow(page, "Show minimap button", "showMinimapButton", y, BL.RefreshMinimapVisibility); y = y + ROW_HEIGHT
     AddCheckboxRow(page, "Show background panel", "showBackground", y); y = y + ROW_HEIGHT
     AddCheckboxRow(page, "Show duration inside icon", "showDurationInside", y); y = y + ROW_HEIGHT
     AddCheckboxRow(page, "Grow right-to-left", "growLeft", y); y = y + ROW_HEIGHT
-    AddCheckboxRow(page, "Consolidate same-category buffs", "consolidate", y); y = y + ROW_HEIGHT
-    AddCheckboxRow(page, "  -> only while in a group", "consolidateOnlyGroup", y); y = y + ROW_HEIGHT
-    AddCheckboxRow(page, "  -> only while in a raid", "consolidateOnlyRaid", y); y = y + ROW_HEIGHT
+    -- Which categories actually consolidate is a per-category toggle now
+    -- (Categories tab, next to each row) - these two just restrict WHEN
+    -- consolidation is allowed to kick in at all, on top of whichever
+    -- categories have their own toggle on.
+    AddCheckboxRow(page, "Consolidate only while in a group", "consolidateOnlyGroup", y); y = y + ROW_HEIGHT
+    AddCheckboxRow(page, "Consolidate only while in a raid", "consolidateOnlyRaid", y); y = y + ROW_HEIGHT
 
     y = AddDivider(page, y)
     y = AddSectionHeader(page, "Layout", y)
@@ -456,19 +460,41 @@ local function RefreshCategoryList()
             end)
             row.swatch = swatch
 
-            local name = row:CreateFontString(nil, "OVERLAY")
-            name:SetPoint("LEFT", swatch, "RIGHT", 6, 0)
-            name:SetPoint("RIGHT", row, "RIGHT", -20, 0)
-            name:SetJustifyH("LEFT")
-            row.name = name
-            table.insert(refreshers, function() row.name:SetFont(BL.GetFontPath(), 11, "OUTLINE") end)
-
             local del = CreateSmallButton(row, 16, "x")
             del:SetPoint("RIGHT", row, "RIGHT", 0, 0)
             del:SetScript("OnClick", function()
                 BL.ConfirmDeleteCategory(this.categoryId)
             end)
             row.del = del
+
+            -- Per-category Consolidate toggle - a plain colored square,
+            -- same visual weight as the color swatch, not another full
+            -- bordered button next to "x" (two of those per row read as
+            -- cluttered). Filled and bright when on, dim when off.
+            -- categoryId is set fresh on every refresh below, same as
+            -- swatch/del - this button object is reused across
+            -- different categories as the list changes, so nothing
+            -- about "which category" is fixed at creation time.
+            local consolidateBtn = CreateFrame("Button", nil, row)
+            consolidateBtn:SetWidth(14)
+            consolidateBtn:SetHeight(14)
+            consolidateBtn:SetPoint("RIGHT", del, "LEFT", -6, 0)
+            consolidateBtn.tex = consolidateBtn:CreateTexture(nil, "OVERLAY")
+            consolidateBtn.tex:SetAllPoints(consolidateBtn)
+            consolidateBtn.tex:SetTexture("Interface\\Buttons\\WHITE8X8")
+            consolidateBtn:SetScript("OnClick", function()
+                BL.ToggleCategoryConsolidate(this.categoryId)
+                BL.ForceRefresh()
+                RefreshCategoryList()
+            end)
+            row.consolidateBtn = consolidateBtn
+
+            local name = row:CreateFontString(nil, "OVERLAY")
+            name:SetPoint("LEFT", swatch, "RIGHT", 6, 0)
+            name:SetPoint("RIGHT", consolidateBtn, "LEFT", -4, 0)
+            name:SetJustifyH("LEFT")
+            row.name = name
+            table.insert(refreshers, function() row.name:SetFont(BL.GetFontPath(), 11, "OUTLINE") end)
 
             categoryRows[i] = row
         end
@@ -479,6 +505,12 @@ local function RefreshCategoryList()
         row.name:SetFont(BL.GetFontPath(), 11, "OUTLINE")
         row.name:SetText(cat.name)
         row.del.categoryId = id
+        row.consolidateBtn.categoryId = id
+        if cat.consolidate then
+            row.consolidateBtn.tex:SetVertexColor(0.64, 0.49, 0.85, 1)
+        else
+            row.consolidateBtn.tex:SetVertexColor(0.25, 0.25, 0.25, 1)
+        end
         -- "Other" (and anything else marked non-deletable) has no
         -- delete button at all - BL.DeleteCategory would refuse it
         -- anyway, but hiding it here avoids an inert button.
@@ -641,6 +673,27 @@ local function BuildCategoriesTab(page, targetHeight)
     local resetBtn = CreateSmallButton(page, halfWidth, "Reset to Default")
     resetBtn:SetPoint("LEFT", newBtn, "RIGHT", 4, 0)
     resetBtn:SetScript("OnClick", function() BL.ConfirmResetCategoriesToDefault() end)
+    y = y + ROW_HEIGHT + 4
+
+    -- Bulk override for the per-category toggles below, not a separate
+    -- setting of its own - just walks every category and flips its
+    -- BL.ToggleCategoryConsolidate-managed flag the same way clicking
+    -- each one individually would.
+    local allBtn = CreateSmallButton(page, halfWidth, "Consolidate All")
+    allBtn:SetPoint("TOPLEFT", page, "TOPLEFT", 14, -y)
+    allBtn:SetScript("OnClick", function()
+        BL.SetAllCategoriesConsolidate(true)
+        BL.ForceRefresh()
+        RefreshCategoryList()
+    end)
+
+    local noneBtn = CreateSmallButton(page, halfWidth, "Consolidate None")
+    noneBtn:SetPoint("LEFT", allBtn, "RIGHT", 4, 0)
+    noneBtn:SetScript("OnClick", function()
+        BL.SetAllCategoriesConsolidate(false)
+        BL.ForceRefresh()
+        RefreshCategoryList()
+    end)
     y = y + ROW_HEIGHT + 4
 
     -- Everything below the scroll list, in the order it's built further
@@ -830,3 +883,117 @@ function BL.ToggleOptions()
         frame:Show()
     end
 end
+
+--------------------------------------------------------------------------
+-- Minimap button - same draggable-icon pattern as CombatLedger's own
+-- CreateMinimapButton (right down to the angle math), opening Options
+-- on click instead of toggling a separate main window - this addon
+-- doesn't have one of those, the buff bar is always meant to be up.
+-- Deliberately NOT CombatLedger's book icon (INV_Misc_Book_09) - two
+-- "Ledger" addons on the same minimap with the same icon would be
+-- indistinguishable, the exact problem that icon's own comment in
+-- CombatLedger already documents from a different collision.
+--------------------------------------------------------------------------
+
+local minimapButton
+
+local function CreateMinimapButton()
+    local btn = CreateFrame("Button", "BuffLedgerMinimapButton", Minimap)
+    btn:SetWidth(31)
+    btn:SetHeight(31)
+    btn:SetFrameStrata("MEDIUM")
+    btn:SetFrameLevel(8)
+    btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    btn:RegisterForDrag("LeftButton")
+    btn:SetMovable(true)
+
+    local overlay = btn:CreateTexture(nil, "OVERLAY")
+    overlay:SetWidth(53)
+    overlay:SetHeight(53)
+    overlay:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+    overlay:SetPoint("TOPLEFT", 0, 0)
+
+    local icon = btn:CreateTexture(nil, "BACKGROUND")
+    icon:SetWidth(20)
+    icon:SetHeight(20)
+    icon:SetTexture("Interface\\Icons\\Spell_Holy_PrayerOfHealing")
+    icon:SetPoint("TOPLEFT", 7, -6)
+    icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+    local highlight = btn:CreateTexture(nil, "HIGHLIGHT")
+    highlight:SetWidth(20)
+    highlight:SetHeight(20)
+    highlight:SetPoint("TOPLEFT", 7, -6)
+    highlight:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
+    highlight:SetBlendMode("ADD")
+
+    local function UpdatePosition(angle)
+        btn:ClearAllPoints()
+        btn:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * 80, math.sin(angle) * 80)
+    end
+    btn.UpdatePosition = UpdatePosition
+
+    -- This client restores the real BuffLedgerDB from disk AFTER this
+    -- file finishes executing (the same SavedVariables timing quirk
+    -- documented in Core.lua), so a saved minimapAngle read right here
+    -- would always be nil - just place it at the default for now,
+    -- BL.RefreshMinimapPosition (called below on PLAYER_ENTERING_WORLD)
+    -- re-reads it once the real data actually exists.
+    UpdatePosition(3.93) -- ~225 deg, bottom-left
+
+    btn:SetScript("OnDragStart", function()
+        this:SetScript("OnUpdate", function()
+            local mx, my = Minimap:GetCenter()
+            local px, py = GetCursorPosition()
+            local scale = Minimap:GetEffectiveScale()
+            px, py = px / scale, py / scale
+            local angle = math.atan2(py - my, px - mx)
+            BuffLedgerDB.minimapAngle = angle
+            UpdatePosition(angle)
+        end)
+    end)
+    btn:SetScript("OnDragStop", function()
+        this:SetScript("OnUpdate", nil)
+    end)
+
+    btn:SetScript("OnClick", function()
+        BL.ToggleOptions()
+    end)
+
+    btn:SetScript("OnEnter", function()
+        GameTooltip:SetOwner(this, "ANCHOR_LEFT")
+        GameTooltip:SetText("|cffa335eeBuffLedger|r")
+        GameTooltip:AddLine("Click for Options", 1, 1, 1)
+        GameTooltip:AddLine("Drag to move this button", 0.7, 0.7, 0.7)
+        GameTooltip:Show()
+    end)
+    btn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+
+    return btn
+end
+
+function BL.RefreshMinimapPosition()
+    if not minimapButton then return end
+    local angle = (BuffLedgerDB and BuffLedgerDB.minimapAngle) or 3.93
+    minimapButton.UpdatePosition(angle)
+end
+
+function BL.RefreshMinimapVisibility()
+    if not minimapButton then return end
+    if BL.GetSetting("showMinimapButton") == false then
+        minimapButton:Hide()
+    else
+        minimapButton:Show()
+    end
+end
+
+minimapButton = CreateMinimapButton()
+BL.RefreshMinimapVisibility()
+
+local minimapEventFrame = CreateFrame("Frame")
+minimapEventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+minimapEventFrame:SetScript("OnEvent", function()
+    BL.RefreshMinimapPosition()
+end)

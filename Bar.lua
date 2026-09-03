@@ -472,13 +472,16 @@ local function UpdateBackground()
 end
 BL.UpdateBackground = UpdateBackground
 
--- The two restriction checkboxes are independent settings, not a
--- radio pair, but that's harmless: a raid is always also a group, so
--- checking both just behaves as "only in a raid" (the stricter one) -
--- there's no actual contradiction to resolve.
-local function ShouldConsolidate()
-    if not BL.GetSetting("consolidate") then return false end
-
+-- Whether the group/raid restriction (if either is on) currently
+-- permits consolidation at all - a blanket modifier that applies on
+-- top of whichever categories have their own Consolidate toggle on
+-- (BL.GetCategory(id).consolidate, checked per-cluster in
+-- LayoutButtons below), not a per-category concept itself. The two
+-- restriction checkboxes are independent settings, not a radio pair,
+-- but that's harmless: a raid is always also a group, so checking both
+-- just behaves as "only in a raid" (the stricter one) - there's no
+-- actual contradiction to resolve.
+local function ConsolidateAllowedNow()
     if BL.GetSetting("consolidateOnlyRaid") then
         return GetNumRaidMembers and GetNumRaidMembers() > 0
     end
@@ -556,7 +559,7 @@ local function LayoutButtons(entries)
     local x, row = 0, 0
     local slot = 0
     local firstOnRow = true
-    local consolidate = ShouldConsolidate()
+    local consolidateAllowedNow = ConsolidateAllowedNow()
     local c
     -- x already carries a trailing `spacing` from the last icon placed
     -- (every icon advances x by size+spacing, cluster boundary or not -
@@ -574,7 +577,12 @@ local function LayoutButtons(entries)
         -- Only worth consolidating a cluster that's actually more than
         -- one icon - a lone buff already IS its own single icon, so
         -- there's nothing to collapse and no badge should appear on it.
-        local doConsolidate = consolidate and count > 1
+        -- Per-category now (BL.GetCategory(id).consolidate), not one
+        -- blanket setting - every entry in a cluster shares the same
+        -- categoryId (that's what makes it one cluster), so checking
+        -- the first member's category speaks for the whole thing.
+        local clusterCat = BL.GetCategory(entries[cluster.first].categoryId)
+        local doConsolidate = consolidateAllowedNow and clusterCat and clusterCat.consolidate and count > 1
 
         -- Build the list of icons this cluster renders as, in final
         -- left-to-right visual order, before worrying about placement -

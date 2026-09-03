@@ -25,11 +25,11 @@ Nothing here touches BuffLedger's own built-in recognition data (~300 buff names
 
 ## Consolidation
 
-Once a category's cluster gets past a couple of icons - a 40-man raid buffing you with everything a class has - it can eat a lot of bar. Turn on Consolidate (Buff Bar Options) and any cluster of 2+ collapses into a single icon: a count badge, the timer of whichever buff in it is closest to falling off, and a hover popout showing the real icon and timer for every member. Nothing is hidden, just tucked one hover deeper.
+Once a category's cluster gets past a couple of icons - a 40-man raid buffing you with everything a class has - it can eat a lot of bar. Per category, not all-or-nothing: click the "C" toggle next to any category in the Categories tab, and just that one collapses whenever it hits 2+ buffs - a count badge, the timer of whichever buff in it is closest to falling off, and a hover popout showing the real icon and timer for every member. Want your class buffs spelled out but your consumables tucked away? Turn it on for Consumable and leave every class alone. Nothing is ever hidden, just tucked one hover deeper.
 
 ![A consolidated cluster - one icon, a count badge, and the real members on hover](screenshots/consolidated.png)
 
-Two sub-options scope it to when it's actually useful: only while grouped (party or raid), or only while specifically in a raid - so a quiet solo bar can stay uncollapsed and only tidy itself up when things would otherwise get crowded.
+Two settings in the Buff Bar Options tab scope *when* consolidation is allowed to kick in at all, on top of whichever categories have their toggle on: only while grouped (party or raid), or only while specifically in a raid - so a quiet solo bar can stay uncollapsed and only tidy itself up when things would otherwise get crowded.
 
 ## Requires
 
@@ -44,7 +44,7 @@ Looks like pfUI by default - the flat near-black border, drop shadow, and Expres
 
 ## Usage
 
-Drag either bar to reposition it (both start unlocked). `/bl options` opens the full settings window - Buff Bar and Debuff Bar tabs cover icon size, spacing, columns, font, text size, border thickness, scale, growth direction, and consolidation; the Categories tab covers everything above.
+Drag either bar to reposition it (both start unlocked). `/bl options` (or the minimap button) opens the full settings window - Buff Bar and Debuff Bar tabs cover icon size, spacing, columns, font, text size, border thickness, scale, growth direction, and consolidation; the Categories tab covers everything above. The minimap button itself can be dragged around the minimap, or turned off entirely from the Buff Bar tab.
 
 - `/bl` or `/buffledger` - full command list
 - `/bl options` (or `/bl opt`, `/bl config`) - settings window (Buff Bar, Debuff Bar, and Categories tabs)

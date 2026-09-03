@@ -1,10 +1,11 @@
 --[[
     BuffLedger - the actual buff bar: scans the player's HELPFUL auras
     plus weapon enchants, sorts/colors them by category (see Data.lua),
-    and lays out icon buttons in a movable grid. Never reads or hides
-    debuffs, and never touches Blizzard's own BuffFrame specifically -
-    see HideOtherBuffFrames below for why (it renders debuffs too, on
-    this client). pfUI's own debuff frame is untouched either way.
+    and lays out icon buttons in a movable grid. Never reads debuffs
+    itself (see DebuffBar.lua for that), but does hide Blizzard's own
+    BuffFrame (and pfUI's buff/debuff frames, if pfUI is loaded) - see
+    HideOtherBuffFrames below for why that's safe now even though
+    BuffFrame renders the player's own debuffs too, on this client.
 ]]
 
 BuffLedger = BuffLedger or {}
@@ -169,6 +170,15 @@ local function BuildSignature(entries)
     return table.concat(parts, "|")
 end
 
+-- Declared here (not down by OnUpdate where it's also used) because
+-- CreateIconButton's tooltip below needs it too, and a local function
+-- can only be seen by closures defined AFTER its own declaration.
+local function FormatTime(sec)
+    if sec >= 3600 then return string.format("%dh", math.floor(sec / 3600) + 1) end
+    if sec >= 60 then return string.format("%dm", math.floor(sec / 60) + 1) end
+    return string.format("%d", math.floor(sec + 0.5))
+end
+
 -- [ Frame + buttons ] ---------------------------------------------------
 
 BL.frame = CreateFrame("Frame", "BuffLedgerFrame", UIParent)
@@ -192,7 +202,21 @@ local function CreateIconButton(i)
 
     btn:SetScript("OnEnter", function()
         GameTooltip:SetOwner(this, "ANCHOR_BOTTOMRIGHT")
-        if this.isTest then
+        if this.consolidatedMembers then
+            -- A consolidated icon stands in for several real auras at
+            -- once - no single buffIndex/spellId to ask the tooltip API
+            -- about, so the list is built by hand from what LayoutButtons
+            -- recorded for this cluster.
+            GameTooltip:SetText(this.consolidatedTitle or "Buffs")
+            local now = GetTime()
+            local i
+            for i = 1, table.getn(this.consolidatedMembers) do
+                local m = this.consolidatedMembers[i]
+                local remain = m.expirationTime - now
+                local timeStr = (m.expirationTime > 0 and remain > 0) and FormatTime(remain) or ""
+                GameTooltip:AddLine(m.name .. (timeStr ~= "" and ("  |cff999999" .. timeStr .. "|r") or ""), 1, 1, 1)
+            end
+        elseif this.isTest then
             -- Synthetic /bl test data has no real aura/item behind it to
             -- ask the tooltip API about - just show what it's standing
             -- in for.
@@ -341,10 +365,11 @@ local function LayoutButtons(entries)
     -- either way, only the final anchor/sign flips.
     local growLeft = BL.GetSetting("growLeft") ~= false
 
-    local n = table.getn(entries)
     local clusters = BuildClusters(entries)
     local x, row = 0, 0
+    local slot = 0
     local firstOnRow = true
+    local consolidate = BL.GetSetting("consolidate")
     local c
     -- x already carries a trailing `spacing` from the last icon placed
     -- (every icon advances x by size+spacing, cluster boundary or not -
@@ -359,7 +384,83 @@ local function LayoutButtons(entries)
     for c = 1, table.getn(clusters) do
         local cluster = clusters[c]
         local count = cluster.last - cluster.first + 1
-        local clusterWidth = count * size + (count - 1) * spacing
+        -- Only worth consolidating a cluster that's actually more than
+        -- one icon - a lone buff already IS its own single icon, so
+        -- there's nothing to collapse and no badge should appear on it.
+        local doConsolidate = consolidate and count > 1
+
+        -- Build the list of icons this cluster renders as, in final
+        -- left-to-right visual order, before worrying about placement -
+        -- either every real entry (one icon each) or a single synthetic
+        -- item standing in for the whole cluster.
+        local items = {}
+        if doConsolidate then
+            -- entries[] is sorted ascending by time within a cluster
+            -- (see CollectEntries), so cluster.first is already the
+            -- soonest-to-expire member - the representative icon/timer,
+            -- same "most urgent = most visually prominent" reasoning as
+            -- everywhere else in this file. spellId/buffIndex are left
+            -- nil - there's no single spell a merged icon could cancel.
+            local rep = entries[cluster.first]
+            local members = {}
+            local m
+            for m = cluster.first, cluster.last do
+                table.insert(members, { name = entries[m].name, expirationTime = entries[m].expirationTime })
+            end
+            -- "Paladin" (from the class) or "World"/"Consumable"/... (from
+            -- the group) reads as a tooltip title far better than the raw
+            -- "CLASS - PALADIN" groupLabel string used for the small gray
+            -- isTest subtitle elsewhere.
+            local titleRaw = rep.class or rep.group or "Buffs"
+            local title = string.upper(string.sub(titleRaw, 1, 1)) .. string.lower(string.sub(titleRaw, 2))
+            table.insert(items, {
+                icon = rep.icon,
+                expirationTime = rep.expirationTime,
+                countText = count,
+                group = rep.group,
+                class = rep.class,
+                isTest = rep.isTest,
+                consolidatedMembers = members,
+                consolidatedTitle = title,
+            })
+        else
+            -- Placement order within the cluster - forward (soonest-
+            -- expiring entry first) normally, since x=0 is the LEFTMOST
+            -- slot and grows rightward, so array-first already lands
+            -- leftmost. But when growLeft is on, x=0 is the RIGHTMOST
+            -- slot and each subsequent icon goes further left - placed
+            -- forward, the soonest entry would land rightmost and the
+            -- longest-remaining one leftmost, which reads as DESCENDING
+            -- time left-to-right (the bug: 10m appearing before 17m/
+            -- 17s). Walking the cluster backward here undoes exactly
+            -- that inversion, so reading left-to-right is ascending
+            -- (soonest first) in both growth directions.
+            local kStart, kEnd, kStep
+            if growLeft then
+                kStart, kEnd, kStep = cluster.last, cluster.first, -1
+            else
+                kStart, kEnd, kStep = cluster.first, cluster.last, 1
+            end
+            local k
+            for k = kStart, kEnd, kStep do
+                local entry = entries[k]
+                table.insert(items, {
+                    icon = entry.icon,
+                    expirationTime = entry.expirationTime,
+                    countText = entry.stackCount > 1 and entry.stackCount or "",
+                    group = entry.group,
+                    class = entry.class,
+                    isTest = entry.isTest,
+                    buffIndex = entry.index,
+                    buffName = entry.name,
+                    spellId = entry.spellId,
+                    isWeapon = entry.isWeapon,
+                    weaponSlot = entry.weaponSlot,
+                })
+            end
+        end
+
+        local clusterWidth = doConsolidate and size or (count * size + (count - 1) * spacing)
 
         if not firstOnRow then
             if x + extraGap + clusterWidth > rowWidth then
@@ -371,24 +472,9 @@ local function LayoutButtons(entries)
             end
         end
 
-        -- Placement order within the cluster - forward (soonest-expiring
-        -- entry first) normally, since x=0 is the LEFTMOST slot and grows
-        -- rightward, so array-first already lands leftmost. But when
-        -- growLeft is on, x=0 is the RIGHTMOST slot and each subsequent
-        -- icon goes further left - placed forward, the soonest entry
-        -- would land rightmost and the longest-remaining one leftmost,
-        -- which reads as DESCENDING time left-to-right (the bug: 10m
-        -- appearing before 17m/17s). Walking the cluster backward here
-        -- undoes exactly that inversion, so reading left-to-right is
-        -- ascending (soonest first) in both growth directions.
-        local kStart, kEnd, kStep
-        if growLeft then
-            kStart, kEnd, kStep = cluster.last, cluster.first, -1
-        else
-            kStart, kEnd, kStep = cluster.first, cluster.last, 1
-        end
-        local k
-        for k = kStart, kEnd, kStep do
+        local ii
+        for ii = 1, table.getn(items) do
+            local item = items[ii]
             -- Only triggers when a single cluster is wider than rowWidth
             -- all by itself - the cluster-level check above already
             -- guaranteed it starts a fresh row when it needs one.
@@ -397,18 +483,20 @@ local function LayoutButtons(entries)
                 row = row + 1
             end
 
-            local entry = entries[k]
-            local btn = GetButton(k)
-            btn.buffIndex = entry.index
-            btn.buffName = entry.name
-            btn.groupLabel = entry.class and (entry.group .. " - " .. entry.class) or entry.group
-            btn.spellId = entry.spellId
-            btn.isWeapon = entry.isWeapon
-            btn.weaponSlot = entry.weaponSlot
-            btn.isTest = entry.isTest
-            btn.texture:SetTexture(entry.icon)
+            slot = slot + 1
+            local btn = GetButton(slot)
+            btn.buffIndex = item.buffIndex
+            btn.buffName = item.buffName
+            btn.groupLabel = item.class and (item.group .. " - " .. item.class) or item.group
+            btn.spellId = item.spellId
+            btn.isWeapon = item.isWeapon
+            btn.weaponSlot = item.weaponSlot
+            btn.isTest = item.isTest
+            btn.consolidatedMembers = item.consolidatedMembers
+            btn.consolidatedTitle = item.consolidatedTitle
+            btn.texture:SetTexture(item.icon)
             btn.count:SetFont(fontPath, fontSize, "OUTLINE")
-            btn.count:SetText(entry.stackCount > 1 and entry.stackCount or "")
+            btn.count:SetText(item.countText)
             btn.timer:SetFont(fontPath, math.max(8, fontSize - 1), "OUTLINE")
             btn.timer:ClearAllPoints()
             if showDurationInside then
@@ -416,10 +504,10 @@ local function LayoutButtons(entries)
             else
                 btn.timer:SetPoint("TOP", btn, "BOTTOM", 0, -3)
             end
-            btn.expirationTime = entry.expirationTime
+            btn.expirationTime = item.expirationTime
 
             local skinTarget = BL.ApplyIconSkin(btn)
-            local r, g, b = GetCategoryColor(entry)
+            local r, g, b = GetCategoryColor(item)
             skinTarget:SetBackdropBorderColor(r, g, b, 1)
 
             btn:SetWidth(size)
@@ -439,7 +527,7 @@ local function LayoutButtons(entries)
     end
 
     local j
-    for j = n + 1, table.getn(buttons) do
+    for j = slot + 1, table.getn(buttons) do
         if buttons[j] then buttons[j]:Hide() end
     end
 
@@ -474,12 +562,6 @@ end
 
 function BL.ForceRefresh()
     RefreshBar(true)
-end
-
-local function FormatTime(sec)
-    if sec >= 3600 then return string.format("%dh", math.floor(sec / 3600) + 1) end
-    if sec >= 60 then return string.format("%dm", math.floor(sec / 60) + 1) end
-    return string.format("%d", math.floor(sec + 0.5))
 end
 
 local updateElapsed = 0
@@ -549,26 +631,25 @@ BL.frame:SetScale(tonumber(BL.GetSetting("scale")) or 1)
 
 -- [ Hide Blizzard's / pfUI's own buff frame ] -------------------------------
 
--- Blizzard's stock BuffFrame is deliberately NOT touched anymore - it
--- used to get Hide()+UnregisterAllEvents()'d unconditionally here, on
--- the assumption (never actually verified) that it only ever shows
--- HELPFUL auras, the same way pfUI's own separate pfBuffFrame/
--- pfDebuffFrame split them. Confirmed wrong: on this client the
--- player's own debuffs render through that same BuffFrame rather than a
--- separate frame, so hiding it (UnregisterAllEvents especially - that
--- stops it from ever refreshing again even if shown) was taking real
--- debuffs down with it. The cost of leaving it alone is Blizzard's
--- stock buff icons possibly showing alongside this addon's own bar - a
--- real but purely cosmetic downside, and a far smaller one than
--- silently hiding debuffs.
---
--- pfUI's own pfBuffFrame/wepbuffs and Blizzard's TemporaryEnchantFrame
--- remain safe to hide unconditionally - none of those are shared with
--- debuff rendering the way BuffFrame apparently is here. Hiding them is
--- harmless even when pfUI (or nothing) already did it (Hide on an
--- already-hidden frame is a no-op).
+-- Blizzard's stock BuffFrame used to be left alone entirely: on this
+-- client the player's own debuffs render through that same BuffFrame
+-- rather than a separate frame, and back when BuffLedger only had a
+-- buff bar, hiding it (UnregisterAllEvents especially - that stops it
+-- from ever refreshing again even if shown) meant taking real debuffs
+-- down with it. That's no longer true - DebuffBar.lua now reads the
+-- player's debuffs directly from the aura API, completely independent
+-- of whatever Blizzard's own BuffFrame is doing, so hiding BuffFrame
+-- can no longer hide any debuff BuffLedger itself would show. Leaving
+-- it up just meant Blizzard's stock icons duplicating this addon's own
+-- bars - hiding it unconditionally (pfUI installed or not) is what
+-- "this replaces the stock frame" was supposed to mean all along.
 local function HideOtherBuffFrames()
     local done = true
+
+    if BuffFrame then
+        BuffFrame:Hide()
+        BuffFrame:UnregisterAllEvents()
+    end
 
     if TemporaryEnchantFrame then
         TemporaryEnchantFrame:Hide()
@@ -626,6 +707,8 @@ SlashCmdList["BUFFLEDGER"] = function(msg)
 
     if msg == "scan" then
         BL.ScanRaidBuffs()
+    elseif msg == "auras" then
+        BL.ScanPlayerAuras()
     elseif msg == "options" or msg == "opt" or msg == "config" then
         BL.ToggleOptions()
     elseif msg == "test" then

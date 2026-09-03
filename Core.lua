@@ -36,6 +36,7 @@ BL.defaultSettings = {
     showBackground = false, -- bordered panel behind the whole bar, sized to fit - off by default (most people run this over pfUI's own dock/panel)
     showDurationInside = false, -- overlay the timer text on the icon instead of below it - mirrors pfUI's own "Show Duration Inside Buff" option, same default (off)
     growLeft = true, -- icons grow from the bar's right edge leftward, matching pfUI's own default buff frame direction - false grows left-to-right instead
+    consolidate = false, -- collapse each same-category cluster of 2+ buffs into a single icon (soonest-expiring's icon/timer, a count badge, hover for the full list) instead of one icon per buff
     showClass = true,
     showWeapon = true,
     showConsumable = true,

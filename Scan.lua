@@ -104,3 +104,45 @@ function BL.ScanRaidBuffs()
         DEFAULT_CHAT_FRAME:AddMessage("  \"" .. entry.name .. "\" (x" .. entry.rec.count .. ") " .. guess)
     end
 end
+
+-- Raw dump of every one of the player's own aura slots across both
+-- filters, well past MAX_BUFFS/MAX_DEBUFFS (16-32) - a direct answer to
+-- "is this buff actually there and BuffLedger just isn't iterating far
+-- enough to reach it" vs "the API genuinely never reports it at all",
+-- which a "such-and-such debuff isn't showing" report alone can't tell
+-- apart on its own.
+function BL.ScanPlayerAuras()
+    if not C_UnitAuras or not C_UnitAuras.GetAuraDataByIndex then
+        BL.Print("Can't scan - requires classicapi.dll (github.com/brues-code/ClassicAPI) or an equivalent mod exposing C_UnitAuras.")
+        return
+    end
+
+    BL.Print("Your current auras (raw index dump, both filters):")
+    local filters = { "HELPFUL", "HARMFUL" }
+    local total = 0
+    local now = GetTime()
+    local f
+    for f = 1, table.getn(filters) do
+        local filter = filters[f]
+        local i
+        for i = 1, 40 do
+            local name, icon, applications, expirationTime, spellId, dispelName = BL.GetAura("player", i, filter)
+            if name then
+                total = total + 1
+                local remain = ""
+                if expirationTime and expirationTime > 0 then
+                    remain = string.format(" (%.0fs left)", expirationTime - now)
+                end
+                local dispelStr = ""
+                if dispelName and dispelName ~= "" then
+                    dispelStr = " - " .. dispelName
+                end
+                DEFAULT_CHAT_FRAME:AddMessage("  [" .. filter .. " " .. i .. "] " .. name .. remain .. dispelStr)
+            end
+        end
+    end
+
+    if total == 0 then
+        BL.Print("No auras found at all - something's wrong with the aura API itself, not just this addon.")
+    end
+end

@@ -254,6 +254,7 @@ local function BuildBuffTab(page)
     AddCheckboxRow(page, "Show background panel", "showBackground", y); y = y + ROW_HEIGHT
     AddCheckboxRow(page, "Show duration inside icon", "showDurationInside", y); y = y + ROW_HEIGHT
     AddCheckboxRow(page, "Grow right-to-left", "growLeft", y); y = y + ROW_HEIGHT
+    AddCheckboxRow(page, "Consolidate same-category buffs", "consolidate", y); y = y + ROW_HEIGHT
 
     y = AddDivider(page, y)
     y = AddSectionHeader(page, "Layout", y)

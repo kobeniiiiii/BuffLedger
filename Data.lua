@@ -78,6 +78,7 @@ BL.BUFF_CLASS = {
     ["Sanctity Aura"] = "PALADIN",
     ["Holy Shield"] = "PALADIN",
     ["Redoubt"] = "PALADIN",
+    ["Vengeance"] = "PALADIN",
 
     -- Priest
     ["Power Word: Fortitude"] = "PRIEST", ["Prayer of Fortitude"] = "PRIEST",
@@ -109,7 +110,6 @@ BL.BUFF_CLASS = {
 
     -- Warrior
     ["Battle Shout"] = "WARRIOR", ["Commanding Shout"] = "WARRIOR",
-    ["Vengeance"] = "WARRIOR",
 
     -- Shaman (totem-granted buffs - some clients show the "Totem" suffix,
     -- some just the effect name, so both forms are listed)

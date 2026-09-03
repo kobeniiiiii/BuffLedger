@@ -405,11 +405,24 @@ local function RefreshCategoryList()
                 ghost.text:SetFont(BL.GetFontPath(), 11, "OUTLINE")
                 ghost.text:SetText(this.name:GetText())
                 ghost:Show()
+                -- Throttled + nil-guarded + pcall-wrapped, same defensive
+                -- shape as the minimap button's own drag handler and for
+                -- the same reason - this ran every single frame with no
+                -- safety net at all before, and an unhandled error
+                -- repeating every frame for a drag's whole duration is a
+                -- much bigger problem than one that fires once.
+                local elapsed = 0
                 this:SetScript("OnUpdate", function()
-                    local cx, cy = GetCursorPosition()
-                    local scale = UIParent:GetEffectiveScale()
-                    ghost:ClearAllPoints()
-                    ghost:SetPoint("CENTER", UIParent, "BOTTOMLEFT", cx / scale, cy / scale)
+                    elapsed = elapsed + arg1
+                    if elapsed < 0.05 then return end
+                    elapsed = 0
+                    pcall(function()
+                        local cx, cy = GetCursorPosition()
+                        local scale = UIParent:GetEffectiveScale()
+                        if not (cx and cy and scale and scale > 0) then return end
+                        ghost:ClearAllPoints()
+                        ghost:SetPoint("CENTER", UIParent, "BOTTOMLEFT", cx / scale, cy / scale)
+                    end)
                 end)
             end)
             row:SetScript("OnDragStop", function()
@@ -418,9 +431,9 @@ local function RefreshCategoryList()
 
                 local _, cy = GetCursorPosition()
                 local scale = categoryScrollContent:GetEffectiveScale()
-                cy = cy / scale
                 local contentTop = categoryScrollContent:GetTop()
-                if contentTop then
+                if cy and scale and scale > 0 and contentTop then
+                    cy = cy / scale
                     local targetIndex = math.floor((contentTop - cy) / CATEGORY_ROW_H) + 1
                     BL.MoveCategoryToIndex(this.categoryId, targetIndex)
                     BL.ForceRefresh()
@@ -941,15 +954,41 @@ local function CreateMinimapButton()
     -- re-reads it once the real data actually exists.
     UpdatePosition(3.93) -- ~225 deg, bottom-left
 
+    -- Reports of a crash while dragging this - the likeliest cause is
+    -- this handler running completely unthrottled (every single
+    -- rendered frame for as long as the drag lasts) and doing
+    -- arithmetic on Minimap:GetCenter()'s result with no nil-check.
+    -- That call can plausibly return nil for a tick if another addon
+    -- (pfUI's own minimap skin, common on this client) is mid-reskin of
+    -- the Minimap frame - an unhandled "attempt to perform arithmetic
+    -- on a nil value" error repeating every frame for the drag's whole
+    -- duration is a much more plausible crash trigger than a single
+    -- one-off error would be. Both a nil-guard and a ~20/sec throttle
+    -- now, plus a pcall around the whole body as a last-resort net -
+    -- CombatLedger's own identical pattern has neither, but this is
+    -- cheap insurance regardless of which of these actually explains it.
+    local minimapDragElapsed = 0
     btn:SetScript("OnDragStart", function()
+        minimapDragElapsed = 0
         this:SetScript("OnUpdate", function()
-            local mx, my = Minimap:GetCenter()
-            local px, py = GetCursorPosition()
-            local scale = Minimap:GetEffectiveScale()
-            px, py = px / scale, py / scale
-            local angle = math.atan2(py - my, px - mx)
-            BuffLedgerDB.minimapAngle = angle
-            UpdatePosition(angle)
+            minimapDragElapsed = minimapDragElapsed + arg1
+            if minimapDragElapsed < 0.05 then return end
+            minimapDragElapsed = 0
+
+            local ok = pcall(function()
+                local mx, my = Minimap:GetCenter()
+                local px, py = GetCursorPosition()
+                if not (mx and my and px and py) then return end
+                local scale = Minimap:GetEffectiveScale()
+                if not scale or scale == 0 then return end
+                px, py = px / scale, py / scale
+                local angle = math.atan2(py - my, px - mx)
+                if BuffLedgerDB then BuffLedgerDB.minimapAngle = angle end
+                UpdatePosition(angle)
+            end)
+            if not ok then
+                this:SetScript("OnUpdate", nil)
+            end
         end)
     end)
     btn:SetScript("OnDragStop", function()

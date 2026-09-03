@@ -1,6 +1,6 @@
 # BuffLedger
 
-A buff bar for vanilla WoW 1.12 (Turtle-based servers) that actually organizes your buffs - grouped into color-coded categories instead of Blizzard's raw, meaningless aura order - and lets you bend that organization to whatever you actually want. Rename a category, recolor it, reorder it, delete it, or build your own from scratch. Reassign any single buff to any category, any time, in two clicks. When a category gets crowded, collapse it into one icon with a badge instead of a wall of clutter. None of this is hardcoded - it's your bar, edited the way you'd edit anything else.
+A buff bar for vanilla WoW 1.12 that actually organizes your buffs - grouped into color-coded categories instead of Blizzard's raw, meaningless aura order - and lets you bend that organization to whatever you actually want. Rename a category, recolor it, reorder it, delete it, or build your own from scratch. Reassign any single buff to any category, any time, in two clicks. When a category gets crowded, collapse it into one icon with a badge instead of a wall of clutter. None of this is hardcoded - it's your bar, edited the way you'd edit anything else.
 
 A matching debuff bar shows what's on you the same way, color-coded by dispel type.
 

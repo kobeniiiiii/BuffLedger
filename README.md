@@ -1,6 +1,6 @@
 # BuffLedger
 
-A standalone buff bar for vanilla WoW 1.12 (Turtle-based servers) that replaces Blizzard's own player buff frame - and pfUI's, if pfUI is loaded - with one that actually sorts by something meaningful: which class gave you a buff, not the raw order the client happens to report auras in. Class buffs, weapon enchants, consumables, world buffs, and racials each get their own color-coded cluster instead of one undifferentiated row of icons.
+A standalone buff bar for vanilla WoW 1.12 (Turtle-based servers) that sorts your buffs by something meaningful - which class gave you a buff, not the raw order the client happens to report auras in - instead of Blizzard's default row. Class buffs, weapon enchants, consumables, world buffs, and racials each get their own color-coded cluster. Replaces pfUI's own buff display too, if pfUI is loaded.
 
 ![Buff icons grouped and color-coded by category, with gaps between clusters](screenshots/main.png)
 
@@ -38,6 +38,7 @@ The client's aura API has no concept of "who gave you this buff" - it's just a n
 
 ## Known limitations
 
+- Blizzard's own default buff icons may still show alongside this addon's bar. They used to get hidden automatically, but that was found to also hide your actual debuffs on this client (the player's debuffs render through that same stock frame here, not a separate one) - not a trade worth making, so it was reverted. If that stock display bothers you, pfUI's own buff module (if you run pfUI) hides it safely on its own without this issue.
 - The name-to-class table is hand-maintained. Most standard buffs are already in it, but a private server's custom content can always add something new - if a buff lands in the generic "Other" bucket, that's what happened. `/bl scan` is the fastest way to find and fix these.
 - A few consumables display under a short generic effect name in-game rather than the item's own name (e.g. Cerebral Cortex Compound's actual buff is "Infallible Mind") - most of these are already accounted for, but this is a real limitation of matching by aura name at all, not a bug.
 - `/bl scan`'s raid-wide read assumes `C_UnitAuras.GetAuraDataByIndex` works against non-player unit tokens (`raid1`, `raid2`, ...) the same way it does for `"player"`. Every confirmed use elsewhere on this client only ever calls it with `"player"`, so this hasn't been independently verified.

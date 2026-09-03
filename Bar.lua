@@ -1,8 +1,10 @@
 --[[
     BuffLedger - the actual buff bar: scans the player's HELPFUL auras
     plus weapon enchants, sorts/colors them by category (see Data.lua),
-    and lays out icon buttons in a movable grid. Debuffs and pfUI's own
-    debuff/weapon-buff frames are untouched.
+    and lays out icon buttons in a movable grid. Never reads or hides
+    debuffs, and never touches Blizzard's own BuffFrame specifically -
+    see HideOtherBuffFrames below for why (it renders debuffs too, on
+    this client). pfUI's own debuff frame is untouched either way.
 ]]
 
 BuffLedger = BuffLedger or {}
@@ -547,25 +549,30 @@ BL.frame:SetScale(tonumber(BL.GetSetting("scale")) or 1)
 
 -- [ Hide Blizzard's / pfUI's own buff frame ] -------------------------------
 
--- Only ever touches the HELPFUL buff container and the weapon-buff
--- container - pfUI's own debuff frame (and Blizzard's
--- TemporaryEnchantFrame) are left running exactly as before, since this
--- addon doesn't display debuffs at all.
+-- Blizzard's stock BuffFrame is deliberately NOT touched anymore - it
+-- used to get Hide()+UnregisterAllEvents()'d unconditionally here, on
+-- the assumption (never actually verified) that it only ever shows
+-- HELPFUL auras, the same way pfUI's own separate pfBuffFrame/
+-- pfDebuffFrame split them. Confirmed wrong: on this client the
+-- player's own debuffs render through that same BuffFrame rather than a
+-- separate frame, so hiding it (UnregisterAllEvents especially - that
+-- stops it from ever refreshing again even if shown) was taking real
+-- debuffs down with it. The cost of leaving it alone is Blizzard's
+-- stock buff icons possibly showing alongside this addon's own bar - a
+-- real but purely cosmetic downside, and a far smaller one than
+-- silently hiding debuffs.
 --
--- Both Blizzard's own BuffFrame and pfUI's wepbuffs frame are hidden
--- unconditionally, not just when pfUI is absent (or only when their own
--- module is enabled) - relying on pfUI to have already done it left
--- Blizzard's default buff bar (and, once this addon started showing
--- weapon enchants itself, pfUI's own weapon-buff icons too) showing
--- alongside this one's duplicate copy. Hiding them here as well is
--- harmless when pfUI already did it (Hide on an already-hidden frame is
--- a no-op).
+-- pfUI's own pfBuffFrame/wepbuffs and Blizzard's TemporaryEnchantFrame
+-- remain safe to hide unconditionally - none of those are shared with
+-- debuff rendering the way BuffFrame apparently is here. Hiding them is
+-- harmless even when pfUI (or nothing) already did it (Hide on an
+-- already-hidden frame is a no-op).
 local function HideOtherBuffFrames()
     local done = true
 
-    if BuffFrame then
-        BuffFrame:Hide()
-        BuffFrame:UnregisterAllEvents()
+    if TemporaryEnchantFrame then
+        TemporaryEnchantFrame:Hide()
+        TemporaryEnchantFrame:UnregisterAllEvents()
     end
 
     if BL.HasPfui() then

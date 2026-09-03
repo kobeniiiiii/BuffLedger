@@ -1,6 +1,6 @@
 # BuffLedger
 
-A standalone buff bar for vanilla WoW 1.12 (Turtle-based servers) that sorts your buffs by something meaningful - which class gave you a buff, not the raw order the client happens to report auras in - instead of Blizzard's default row. Class buffs, weapon enchants, consumables, world buffs, and racials each get their own color-coded cluster. Replaces pfUI's own buff display too, if pfUI is loaded.
+A standalone buff bar for vanilla WoW 1.12 (Turtle-based servers) that sorts your buffs by something meaningful - which class gave you a buff, not the raw order the client happens to report auras in - instead of Blizzard's default row. Class buffs, weapon enchants, consumables, world buffs, and racials each get their own color-coded cluster. A separate debuff bar (own Options tab, no sorting/grouping) shows what's on you the same way. Replaces pfUI's own buff and debuff display too, if pfUI is loaded.
 
 ![Buff icons grouped and color-coded by category, with gaps between clusters](screenshots/main.png)
 
@@ -17,12 +17,12 @@ Looks like pfUI by default - the flat near-black border, drop shadow, and Expres
 
 ## Usage
 
-Drag the bar to reposition it (it starts unlocked). `/bl options` opens a full settings window - icon size, spacing, category gap, columns, font, text size, border thickness, scale, growth direction, and a background panel toggle.
+Drag either bar to reposition it (both start unlocked). `/bl options` opens a full settings window with a tab for each bar - icon size, spacing, columns, font, text size, border thickness, scale, growth direction, and a background panel toggle for both; the buff bar's tab also has a category gap slider, since it's the only one that groups icons into clusters.
 
 - `/bl` or `/buffledger` - full command list
-- `/bl options` (or `/bl opt`, `/bl config`) - settings window
-- `/bl lock` / `/bl unlock` - lock the bar in place, or free it to drag again
-- `/bl reset` - reset position
+- `/bl options` (or `/bl opt`, `/bl config`) - settings window (buff bar and debuff bar tabs)
+- `/bl lock` / `/bl unlock` - lock the buff bar in place, or free it to drag again (the debuff bar's lock is in its Options tab)
+- `/bl reset` - reset buff bar position (the debuff bar has its own Reset Position button in its Options tab)
 - `/bl scan` - scans your current raid/party and reports any buffs it doesn't recognize yet, with a guess at which class they belong to
 - `/bl test [0-1 | % | off]` - preview a shuffled sample of every buff this addon knows about, without needing a raid to actually hold them all at once
 - `/bl toggle <class|weapon|consumable|world|racial|other>` - show/hide one category

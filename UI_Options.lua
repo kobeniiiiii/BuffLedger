@@ -1,12 +1,19 @@
 --[[
     BuffLedger - /bl options: a real settings window instead of only
     slash commands. Everything here just calls the same BL.GetSetting/
-    BL.SetSetting + BL.ForceRefresh pair the slash commands already use
-    (see Bar.lua) - this is a second way to reach the same settings, not
-    a separate code path.
+    BL.SetSetting + BL.ForceRefresh (or ForceDebuffRefresh) pair the
+    slash commands/DebuffBar.lua already use - this is a second way to
+    reach the same settings, not a separate code path.
+
+    Two tabs - Buff Bar and Debuff Bar - rather than one long scroll,
+    same reasoning CombatLedger's own General/Advanced split uses: the
+    debuff bar has its own full set of layout/text/lock controls
+    (DebuffBar.lua), just without the buff bar's Category Gap (there's
+    no clustering to space out - see DebuffBar.lua's own header comment
+    for why).
 
     Visual/widget vocabulary is deliberately ported from CombatLedger's
-    own UI_Options.lua (row label-left/control-right, gold section
+    own UI_Options.lua (tabs, row label-left/control-right, gold section
     headers + thin dividers, +/- stepper controls instead of sliders,
     CreateSmallButton-style flat buttons) so this looks like part of the
     same addon family, not a one-off design. Labels/values still use
@@ -20,6 +27,7 @@ local BL = BuffLedger
 
 local WINDOW_WIDTH = 300
 local ROW_HEIGHT = 24
+local CONTENT_TOP = 64 -- below the title/close row and the tab strip
 
 local frame
 local refreshers = {} -- functions that resync one control's displayed value from current settings
@@ -81,10 +89,16 @@ local function CreateStepper(parent, width)
 end
 
 --------------------------------------------------------------------------
--- Row helpers
+-- Row helpers - all take `parent` as the first arg, so the same helpers
+-- build both tabs' content just by pointing them at pageBuff/pageDebuff.
 --------------------------------------------------------------------------
 
-local function AddCheckboxRow(parent, label, key, y)
+-- `refreshFn` defaults to BL.ForceRefresh (the buff bar) - pass
+-- BL.ForceDebuffRefresh for a debuff-tab row instead. Same reasoning
+-- as AddStepperRow's refreshFn param.
+local function AddCheckboxRow(parent, label, key, y, refreshFn)
+    refreshFn = refreshFn or BL.ForceRefresh
+
     local labelFs = parent:CreateFontString(nil, "OVERLAY")
     labelFs:SetPoint("TOPLEFT", parent, "TOPLEFT", 14, -y)
     labelFs:SetFont(BL.GetFontPath(), 11, "OUTLINE")
@@ -96,7 +110,7 @@ local function AddCheckboxRow(parent, label, key, y)
     cb:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -12, -y + 3)
     cb:SetScript("OnClick", function()
         BL.SetSetting(key, this:GetChecked() and true or false)
-        BL.ForceRefresh()
+        refreshFn()
     end)
 
     table.insert(refreshers, function()
@@ -107,7 +121,11 @@ local function AddCheckboxRow(parent, label, key, y)
     return cb
 end
 
-local function AddStepperRow(parent, label, key, minV, maxV, step, y, formatFn)
+-- `refreshFn` defaults to BL.ForceRefresh (the buff bar) - pass
+-- BL.ForceDebuffRefresh for a debuff-tab row instead.
+local function AddStepperRow(parent, label, key, minV, maxV, step, y, formatFn, refreshFn)
+    refreshFn = refreshFn or BL.ForceRefresh
+
     local labelFs = parent:CreateFontString(nil, "OVERLAY")
     labelFs:SetPoint("TOPLEFT", parent, "TOPLEFT", 14, -y)
     labelFs:SetFont(BL.GetFontPath(), 11, "OUTLINE")
@@ -129,7 +147,7 @@ local function AddStepperRow(parent, label, key, minV, maxV, step, y, formatFn)
 
     local function SetVal(v)
         BL.SetSetting(key, Clamp(v))
-        BL.ForceRefresh()
+        refreshFn()
         stepper.value:SetText(Format(Clamp(v)))
     end
 
@@ -194,6 +212,112 @@ local function AddSectionHeader(parent, label, y)
     return y + ROW_HEIGHT
 end
 
+-- A font-picker row bound to a specific settingKey/refresh pair -
+-- shared shape for the buff tab's "fontKey" and the debuff tab's
+-- "debuffFontKey".
+local function AddFontRow(parent, y, settingKey, refreshFn)
+    return AddDropdownRow(parent, "Font", y, 130,
+        function()
+            local key = BL.GetSetting(settingKey) or "expressway"
+            local i
+            for i = 1, table.getn(BL.FONTS) do
+                if BL.FONTS[i].key == key then return BL.FONTS[i].label end
+            end
+            return BL.FONTS[1].label
+        end,
+        function(anchorBtn)
+            local options = {}
+            local i
+            for i = 1, table.getn(BL.FONTS) do
+                local font = BL.FONTS[i]
+                table.insert(options, {
+                    label = font.label,
+                    onClick = function()
+                        BL.SetSetting(settingKey, font.key)
+                        refreshFn()
+                        Refresh()
+                    end,
+                })
+            end
+            BL.ShowDropdown(anchorBtn, options)
+        end)
+end
+
+--------------------------------------------------------------------------
+-- Tab content builders
+--------------------------------------------------------------------------
+
+local function BuildBuffTab(page)
+    local y = CONTENT_TOP
+
+    AddCheckboxRow(page, "Locked (no dragging)", "locked", y); y = y + ROW_HEIGHT
+    AddCheckboxRow(page, "Show background panel", "showBackground", y); y = y + ROW_HEIGHT
+    AddCheckboxRow(page, "Show duration inside icon", "showDurationInside", y); y = y + ROW_HEIGHT
+    AddCheckboxRow(page, "Grow right-to-left", "growLeft", y); y = y + ROW_HEIGHT
+
+    y = AddDivider(page, y)
+    y = AddSectionHeader(page, "Layout", y)
+    AddStepperRow(page, "Icon size", "iconSize", 16, 60, 1, y); y = y + ROW_HEIGHT
+    AddStepperRow(page, "Icon spacing", "spacing", 0, 20, 1, y); y = y + ROW_HEIGHT
+    AddStepperRow(page, "Category gap", "categoryGap", 0, 40, 1, y); y = y + ROW_HEIGHT
+    AddStepperRow(page, "Columns", "columns", 1, 20, 1, y); y = y + ROW_HEIGHT
+    AddStepperRow(page, "Border thickness", "borderThickness", 1, 6, 1, y); y = y + ROW_HEIGHT
+    AddStepperRow(page, "Scale", "scale", 0.5, 2, 0.05, y, function(v) return string.format("%.2f", v) end); y = y + ROW_HEIGHT
+
+    y = AddDivider(page, y)
+    y = AddSectionHeader(page, "Text", y)
+    AddStepperRow(page, "Text size", "fontSizeOverride", 8, 20, 1, y); y = y + ROW_HEIGHT
+    AddFontRow(page, y, "fontKey", BL.ForceRefresh); y = y + ROW_HEIGHT
+
+    y = y + 10
+    local resetBtn = CreateSmallButton(page, WINDOW_WIDTH - 28, "Reset Position")
+    resetBtn:SetPoint("TOPLEFT", page, "TOPLEFT", 14, -y)
+    resetBtn:SetScript("OnClick", function()
+        BL.ResetLayout()
+        BL.frame:ClearAllPoints()
+        BL.frame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -170, -180)
+        BL.Print("Buff bar position reset.")
+    end)
+    y = y + 18
+
+    return y
+end
+
+local function BuildDebuffTab(page)
+    local y = CONTENT_TOP
+
+    AddCheckboxRow(page, "Locked (no dragging)", "debuffLocked", y, BL.ForceDebuffRefresh); y = y + ROW_HEIGHT
+    AddCheckboxRow(page, "Show background panel", "debuffShowBackground", y, BL.ForceDebuffRefresh); y = y + ROW_HEIGHT
+    AddCheckboxRow(page, "Show duration inside icon", "debuffShowDurationInside", y, BL.ForceDebuffRefresh); y = y + ROW_HEIGHT
+    AddCheckboxRow(page, "Grow right-to-left", "debuffGrowLeft", y, BL.ForceDebuffRefresh); y = y + ROW_HEIGHT
+
+    y = AddDivider(page, y)
+    y = AddSectionHeader(page, "Layout", y)
+    AddStepperRow(page, "Icon size", "debuffIconSize", 16, 60, 1, y, nil, BL.ForceDebuffRefresh); y = y + ROW_HEIGHT
+    AddStepperRow(page, "Icon spacing", "debuffSpacing", 0, 20, 1, y, nil, BL.ForceDebuffRefresh); y = y + ROW_HEIGHT
+    AddStepperRow(page, "Columns", "debuffColumns", 1, 20, 1, y, nil, BL.ForceDebuffRefresh); y = y + ROW_HEIGHT
+    AddStepperRow(page, "Border thickness", "debuffBorderThickness", 1, 6, 1, y, nil, BL.ForceDebuffRefresh); y = y + ROW_HEIGHT
+    AddStepperRow(page, "Scale", "debuffScale", 0.5, 2, 0.05, y, function(v) return string.format("%.2f", v) end, BL.ForceDebuffRefresh); y = y + ROW_HEIGHT
+
+    y = AddDivider(page, y)
+    y = AddSectionHeader(page, "Text", y)
+    AddStepperRow(page, "Text size", "debuffFontSizeOverride", 8, 20, 1, y, nil, BL.ForceDebuffRefresh); y = y + ROW_HEIGHT
+    AddFontRow(page, y, "debuffFontKey", BL.ForceDebuffRefresh); y = y + ROW_HEIGHT
+
+    y = y + 10
+    local resetBtn = CreateSmallButton(page, WINDOW_WIDTH - 28, "Reset Position")
+    resetBtn:SetPoint("TOPLEFT", page, "TOPLEFT", 14, -y)
+    resetBtn:SetScript("OnClick", function()
+        BL.ResetDebuffLayout()
+        BL.debuffFrame:ClearAllPoints()
+        BL.debuffFrame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -170, -260)
+        BL.Print("Debuff bar position reset.")
+    end)
+    y = y + 18
+
+    return y
+end
+
 --------------------------------------------------------------------------
 -- Window
 --------------------------------------------------------------------------
@@ -228,72 +352,42 @@ local function BuildFrame()
     close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -2, -2)
     close:SetScript("OnClick", function() frame:Hide() end)
 
-    local y = 42
+    -- Two plain buttons + two content frames toggled together, not a
+    -- real TabButtonTemplate strip - same "avoid Blizzard's heavier
+    -- templates" reasoning as ShowDropdown instead of UIDropDownMenu.
+    local pageBuff = CreateFrame("Frame", nil, frame)
+    pageBuff:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
+    pageBuff:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", 0, 0)
+    local pageDebuff = CreateFrame("Frame", nil, frame)
+    pageDebuff:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
+    pageDebuff:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", 0, 0)
 
-    AddCheckboxRow(frame, "Locked (no dragging)", "locked", y); y = y + ROW_HEIGHT
-    AddCheckboxRow(frame, "Show background panel", "showBackground", y); y = y + ROW_HEIGHT
-    AddCheckboxRow(frame, "Show duration inside icon", "showDurationInside", y); y = y + ROW_HEIGHT
-    AddCheckboxRow(frame, "Grow right-to-left", "growLeft", y); y = y + ROW_HEIGHT
+    local tabBuffBtn = CreateSmallButton(frame, (WINDOW_WIDTH - 32) / 2, "Buff Bar")
+    tabBuffBtn:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -34)
+    local tabDebuffBtn = CreateSmallButton(frame, (WINDOW_WIDTH - 32) / 2, "Debuff Bar")
+    tabDebuffBtn:SetPoint("LEFT", tabBuffBtn, "RIGHT", 4, 0)
 
-    y = AddDivider(frame, y)
-    y = AddSectionHeader(frame, "Layout", y)
-    AddStepperRow(frame, "Icon size", "iconSize", 16, 60, 1, y); y = y + ROW_HEIGHT
-    AddStepperRow(frame, "Icon spacing", "spacing", 0, 20, 1, y); y = y + ROW_HEIGHT
-    AddStepperRow(frame, "Category gap", "categoryGap", 0, 40, 1, y); y = y + ROW_HEIGHT
-    AddStepperRow(frame, "Columns", "columns", 1, 20, 1, y); y = y + ROW_HEIGHT
-    AddStepperRow(frame, "Border thickness", "borderThickness", 1, 6, 1, y); y = y + ROW_HEIGHT
-    AddStepperRow(frame, "Scale", "scale", 0.5, 2, 0.05, y, function(v) return string.format("%.2f", v) end); y = y + ROW_HEIGHT
+    local function ShowTab(tab)
+        if tab == "debuff" then
+            pageBuff:Hide()
+            pageDebuff:Show()
+            tabBuffBtn:SetBackdropColor(0.15, 0.15, 0.15, 0.75)
+            tabDebuffBtn:SetBackdropColor(0.3, 0.25, 0.4, 0.9)
+        else
+            pageDebuff:Hide()
+            pageBuff:Show()
+            tabDebuffBtn:SetBackdropColor(0.15, 0.15, 0.15, 0.75)
+            tabBuffBtn:SetBackdropColor(0.3, 0.25, 0.4, 0.9)
+        end
+    end
+    tabBuffBtn:SetScript("OnClick", function() ShowTab("buff") end)
+    tabDebuffBtn:SetScript("OnClick", function() ShowTab("debuff") end)
 
-    y = AddDivider(frame, y)
-    y = AddSectionHeader(frame, "Text", y)
-    AddStepperRow(frame, "Text size", "fontSizeOverride", 8, 20, 1, y); y = y + ROW_HEIGHT
-    AddDropdownRow(frame, "Font", y, 130,
-        function()
-            local key = BL.GetSetting("fontKey") or "expressway"
-            local i
-            for i = 1, table.getn(BL.FONTS) do
-                if BL.FONTS[i].key == key then return BL.FONTS[i].label end
-            end
-            return BL.FONTS[1].label
-        end,
-        function(anchorBtn)
-            local options = {}
-            local i
-            for i = 1, table.getn(BL.FONTS) do
-                local font = BL.FONTS[i]
-                table.insert(options, {
-                    label = font.label,
-                    onClick = function()
-                        BL.SetSetting("fontKey", font.key)
-                        BL.ForceRefresh()
-                        Refresh()
-                    end,
-                })
-            end
-            BL.ShowDropdown(anchorBtn, options)
-        end)
-    y = y + ROW_HEIGHT
+    local buffBottom = BuildBuffTab(pageBuff)
+    local debuffBottom = BuildDebuffTab(pageDebuff)
+    frame:SetHeight(math.max(buffBottom, debuffBottom) + 16)
 
-    -- Per-group visibility toggles used to live here (Class/Weapon/
-    -- Consumable/World/Racial/Other checkboxes) - removed: the two-
-    -- column layout was confusing (checkboxes didn't align with their
-    -- own labels), and the simpler reality is everyone wants to see all
-    -- their buffs anyway. The underlying settings/BL.Categorize groups
-    -- still exist for sorting/coloring purposes and remain reachable
-    -- via /bl toggle <group> for anyone who really wants to hide one.
-
-    y = y + 10
-    local resetBtn = CreateSmallButton(frame, WINDOW_WIDTH - 28, "Reset Position")
-    resetBtn:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -y)
-    resetBtn:SetScript("OnClick", function()
-        BL.ResetLayout()
-        BL.frame:ClearAllPoints()
-        BL.frame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -170, -180)
-        BL.Print("Position reset.")
-    end)
-    y = y + 18
-
-    frame:SetHeight(y + 16)
+    ShowTab("buff")
 
     -- A freshly created Frame is shown by default - without this, the
     -- very first /bl options call built the frame (already visible),

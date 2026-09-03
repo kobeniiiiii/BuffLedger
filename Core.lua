@@ -42,6 +42,23 @@ BL.defaultSettings = {
     showWorld = true,
     showRacial = true,
     showOther = true,
+
+    -- Debuff bar - same knobs as the buff bar above, independent values
+    -- (own position/size/etc, see DebuffBar.lua), minus anything that
+    -- only makes sense for the buff bar's class/category clustering
+    -- (categoryGap, showClass/showWeapon/...) - the debuff bar has no
+    -- grouping at all, just dispel-type-colored borders.
+    debuffLocked = false,
+    debuffScale = 1,
+    debuffIconSize = 30,
+    debuffSpacing = 4,
+    debuffColumns = 10,
+    debuffFontSizeOverride = 10,
+    debuffFontKey = "expressway",
+    debuffBorderThickness = 1,
+    debuffShowBackground = false,
+    debuffShowDurationInside = false,
+    debuffGrowLeft = true,
 }
 
 local function EnsureSettingsTable()
@@ -87,6 +104,30 @@ end
 function BL.ResetLayout()
     EnsureLayoutTable()
     BuffLedgerDB.layout.main = nil
+end
+
+-- Debuff bar equivalents - own key in the same layout table, own
+-- default position (a bit further down than the buff bar's default so
+-- they don't spawn on top of each other before you've dragged either).
+function BL.GetDebuffLayout()
+    EnsureLayoutTable()
+    return BuffLedgerDB.layout.debuff
+end
+
+function BL.SaveDebuffLayout(frame)
+    EnsureLayoutTable()
+    local point, _, relPoint, x, y = frame:GetPoint(1)
+    BuffLedgerDB.layout.debuff = {
+        point = point or "TOPRIGHT",
+        relPoint = relPoint or "TOPRIGHT",
+        x = x or -170,
+        y = y or -260,
+    }
+end
+
+function BL.ResetDebuffLayout()
+    EnsureLayoutTable()
+    BuffLedgerDB.layout.debuff = nil
 end
 
 -- Every real icon this addon has ever actually seen (from live aura
@@ -162,6 +203,23 @@ function BL.GetFontSize()
     return tonumber(BL.GetSetting("fontSizeOverride")) or 10
 end
 
+-- Debuff bar equivalents of the two above - separate functions rather
+-- than parameterizing GetFontPath/GetFontSize, since every existing
+-- buff-bar call site already calls those with no arguments and this
+-- keeps that working untouched.
+function BL.GetDebuffFontPath()
+    local key = BL.GetSetting("debuffFontKey") or "expressway"
+    local i
+    for i = 1, table.getn(BL.FONTS) do
+        if BL.FONTS[i].key == key then return BL.FONTS[i].path end
+    end
+    return BL.FONTS[1].path
+end
+
+function BL.GetDebuffFontSize()
+    return tonumber(BL.GetSetting("debuffFontSizeOverride")) or 10
+end
+
 BL.FLAT_BACKDROP = {
     bgFile = "Interface\\BUTTONS\\WHITE8X8", tile = false, tileSize = 0,
     edgeFile = "Interface\\BUTTONS\\WHITE8X8", edgeSize = 1,
@@ -194,7 +252,11 @@ BL.FLAT_BACKDROP = {
 -- suspected culprit; the child-frame switch was the actual fix, so that
 -- guard was never doing anything useful and would have blocked a live
 -- thickness setting from ever taking effect).
-function BL.ApplyIconSkin(btn)
+-- `thicknessOverride` lets the debuff bar (its own independent
+-- "Border Thickness" setting) share this same skinning function instead
+-- of duplicating it - omit it (as every buff-bar call site already
+-- does) to fall back to the buff bar's own "borderThickness" setting.
+function BL.ApplyIconSkin(btn, thicknessOverride)
     if not btn.flatShadow then
         btn.flatShadow = CreateFrame("Frame", nil, btn)
         btn.flatShadow:SetFrameStrata(btn:GetFrameStrata())
@@ -213,7 +275,7 @@ function BL.ApplyIconSkin(btn)
         btn.flatBackdrop = b
     end
 
-    local thickness = tonumber(BL.GetSetting("borderThickness")) or 1
+    local thickness = thicknessOverride or tonumber(BL.GetSetting("borderThickness")) or 1
     btn.flatBackdrop:ClearAllPoints()
     btn.flatBackdrop:SetPoint("TOPLEFT", btn, "TOPLEFT", -thickness, thickness)
     btn.flatBackdrop:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", thickness, -thickness)
@@ -302,18 +364,19 @@ end
 -- the client genuinely supports it and otherwise costs nothing.
 local hasUnitAura = C_UnitAuras and type(C_UnitAuras.UnitAura) == "function"
 
--- Returns name, icon, applications, expirationTime, spellId - the only
--- fields anything in this addon actually reads off an aura - as plain
--- values either way, so callers never unpack a table regardless of
--- which underlying API answered.
+-- Returns name, icon, applications, expirationTime, spellId, dispelName
+-- - the only fields anything in this addon reads off an aura (dispelName
+-- is only used by the debuff bar's border coloring) - as plain values
+-- either way, so callers never unpack a table regardless of which
+-- underlying API answered.
 function BL.GetAura(unit, index, filter)
     if hasUnitAura then
-        local name, icon, applications, _, _, expirationTime, _, _, _, spellId = C_UnitAuras.UnitAura(unit, index, filter)
-        return name, icon, applications, expirationTime, spellId
+        local name, icon, applications, dispelName, _, expirationTime, _, _, _, spellId = C_UnitAuras.UnitAura(unit, index, filter)
+        return name, icon, applications, expirationTime, spellId, dispelName
     end
     local aura = C_UnitAuras.GetAuraDataByIndex(unit, index, filter)
     if not aura then return nil end
-    return aura.name, aura.icon, aura.applications, aura.expirationTime, aura.spellId
+    return aura.name, aura.icon, aura.applications, aura.expirationTime, aura.spellId, aura.dispelName
 end
 
 -- Lightweight click-menu (a plain frame + pooled row buttons) rather

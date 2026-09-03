@@ -326,7 +326,7 @@ local function LayoutButtons(entries)
     -- Mirrors pfUI's own "Show Duration Inside Buff" option (C.buffs.
     -- textinside) - overlaying the timer on the icon instead of below
     -- it means rows don't need the extra vertical room for that text.
-    local rowExtra = showDurationInside and 0 or (fontSize + 4)
+    local rowExtra = showDurationInside and 0 or (fontSize + 5)
     -- Deliberately NOT columns * (size + spacing) - that would make the
     -- bar's own footprint (and therefore its anchored/pinned edge)
     -- shift every time Icon Spacing changes, which is exactly what
@@ -414,7 +414,7 @@ local function LayoutButtons(entries)
             if showDurationInside then
                 btn.timer:SetPoint("CENTER", btn, "CENTER", 0, 0)
             else
-                btn.timer:SetPoint("TOP", btn, "BOTTOM", 0, -2)
+                btn.timer:SetPoint("TOP", btn, "BOTTOM", 0, -3)
             end
             btn.expirationTime = entry.expirationTime
 
@@ -583,6 +583,14 @@ local function HideOtherBuffFrames()
         end
         if pfUI.buff and pfUI.buff.wepbuffs then
             pfUI.buff.wepbuffs:Hide()
+        end
+        -- Unlike Blizzard's BuffFrame, pfUI.buff.debuffs is a real
+        -- dedicated debuff frame, not shared with anything else - safe
+        -- to hide unconditionally now that DebuffBar.lua covers the
+        -- same job. This file only reaches here at all when ClassicAPI
+        -- is present, so DebuffBar.lua already loaded successfully too.
+        if pfUI.buff and pfUI.buff.debuffs then
+            pfUI.buff.debuffs:Hide()
         end
     end
 

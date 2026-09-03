@@ -144,6 +144,8 @@ BL.BUFF_CLASS = {
     ["Detect Greater Invisibility"] = "WARLOCK",
     ["Paranoia"] = "WARLOCK",
     ["Shadow Ward"] = "WARLOCK",
+    ["Soul Link"] = "WARLOCK",
+    ["Master Demonologist"] = "WARLOCK",
     ["Shadow Trance"] = "WARLOCK",
 
     -- Hunter
